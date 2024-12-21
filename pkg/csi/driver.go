@@ -19,9 +19,15 @@ package csi
 
 const (
 	// DriverName is the name of the CSI driver
-	DriverName = "csi.virtual.sinextra.dev"
+	DriverName = "csi.hybrid.sinextra.dev"
 	// DriverVersion is the version of the CSI driver
 	DriverVersion = "0.1.0"
 	// DriverSpecVersion CSI spec version
 	DriverSpecVersion = "1.9.0"
+
+	// MaxVolumesPerNode is the maximum number of volumes that can be attached to a node
+	MaxVolumesPerNode = 24
+
+	// DefaultVolumeSize is the default size of a volume
+	DefaultVolumeSize = 10 // GB
 )

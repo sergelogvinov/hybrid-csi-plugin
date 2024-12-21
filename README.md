@@ -1,4 +1,4 @@
-# Virtual CSI Plugin
+# Hybrid CSI Plugin
 
 ## FAQ
 

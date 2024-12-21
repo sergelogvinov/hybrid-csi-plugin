@@ -1,0 +1,8 @@
+node:
+  nodeSelector:
+    node.cloudprovider.kubernetes.io/platform: nocloud
+  tolerations:
+    - operator: Exists
+
+storageClass:
+  - name: hybrid

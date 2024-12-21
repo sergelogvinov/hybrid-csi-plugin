@@ -1,0 +1,30 @@
+{{ template "chart.header" . }}
+
+{{ template "chart.deprecationWarning" . }}
+
+{{ template "chart.badgesSection" . }}
+
+{{ template "chart.description" . }}
+
+The Container Storage Interface (CSI) plugin is a specification designed to standardize the way container orchestration systems like Kubernetes, interact with different storage systems. The CSI plugin abstracts the underlying storage, enabling the seamless integration of different storage solutions (such as local block devices, file systems, or cloud-based storage) with containerized applications.
+
+{{ template "chart.homepageLine" . }}
+
+{{ template "chart.maintainersSection" . }}
+
+{{ template "chart.sourcesSection" . }}
+
+{{ template "chart.requirementsSection" . }}
+
+## Deploy
+
+```shell
+# Prepare namespace
+kubectl create ns csi-hybrid
+
+# Install hybrid CSI hybrid
+helm upgrade -i --namespace=csi-hybrid -f hybrid-csi.yaml \
+    hybrid-csi-plugin oci://ghcr.io/sergelogvinov/charts/hybrid-csi-plugin
+```
+
+{{ template "chart.valuesSection" . }}

@@ -1,0 +1,21 @@
+# Source: hybrid-csi-plugin/templates/csidriver.yaml
+apiVersion: storage.k8s.io/v1
+kind: CSIDriver
+metadata:
+  name: csi.hybrid.sinextra.dev
+spec:
+  attachRequired: true
+  podInfoOnMount: true
+  storageCapacity: false
+  volumeLifecycleModes:
+    - Persistent
+---
+# Source: hybrid-csi-plugin/templates/storageclass.yaml
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: hybrid
+provisioner: csi.hybrid.sinextra.dev
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Delete

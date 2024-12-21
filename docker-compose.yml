@@ -9,9 +9,8 @@ services:
       target: develop
     network_mode: "service:base"
     environment:
-      # NODE_NAME: worker-11
+      NODE_NAME: builder-03a
       KUBECONFIG: /etc/kubernetes/kubeconfig
-      # UNSAFEMOUNT: "true"
     command:
       - "make"
       - "run"
@@ -26,7 +25,7 @@ services:
         source: ./
         target: /src
   csi-attacher:
-    image: registry.k8s.io/sig-storage/csi-attacher:v4.8.0
+    image: registry.k8s.io/sig-storage/csi-attacher:v4.7.0
     network_mode: "service:base"
     command:
       - "--v=5"
@@ -46,6 +45,7 @@ services:
     network_mode: "service:base"
     command:
       - "--v=5"
+      - "--timeout=360s"
       - "--csi-address=unix:///csi/csi.sock"
       - "--leader-election=false"
       - "--default-fstype=ext4"
@@ -57,9 +57,9 @@ services:
       # - "--node-deployment"
       - "--kubeconfig=/etc/kubernetes/kubeconfig"
     environment:
-      NAMESPACE: csi-proxmox
+      NAMESPACE: csi-hybrid
       POD_NAME: csi-provisioner
-      # NODE_NAME: worker-11
+      NODE_NAME: builder-03a
     volumes:
       - type: volume
         source: socket-dir
@@ -68,14 +68,14 @@ services:
         source: ./hack
         target: /etc/kubernetes
   # csi-node-driver-registrar:
-  #   image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.11.1
+  #   image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.12.0
   #   network_mode: "service:base"
   #   command:
   #     - "--v=5"
   #     - "--csi-address=unix:///csi/csi.sock"
-  #     - "--kubelet-registration-path=/var/lib/kubelet/plugins/csi.proxmox.sinextra.dev/csi.sock"
+  #     - "--kubelet-registration-path=/var/lib/kubelet/plugins/csi.hybrid.sinextra.dev/csi.sock"
   #   environment:
-  #     KUBE_NODE_NAME: worker-11
+  #     KUBE_NODE_NAME: builder-03a
   #   volumes:
   #     - type: volume
   #       source: socket-dir

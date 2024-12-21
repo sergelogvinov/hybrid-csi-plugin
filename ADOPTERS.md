@@ -1,6 +1,6 @@
 # Adopters
 
-This is a list of organizations or projects that have adopted the Proxmox CSI driver.
+This is a list of organizations or projects that have adopted the Hybrid CSI driver.
 
 ## Adopters (listed alphabetically)
 

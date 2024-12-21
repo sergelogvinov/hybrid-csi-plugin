@@ -1,0 +1,26 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "hybrid-csi-plugin.fullname" . }}-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "hybrid-csi-plugin.fullname" . }}-controller
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "hybrid-csi-plugin.serviceAccountName" . }}-controller
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "hybrid-csi-plugin.fullname" . }}-controller
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "hybrid-csi-plugin.fullname" . }}-controller
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "hybrid-csi-plugin.serviceAccountName" . }}-controller
+    namespace: {{ .Release.Namespace }}

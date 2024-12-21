@@ -8,7 +8,7 @@ on:
 
 jobs:
   release-please:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
       pull-requests: write
@@ -18,5 +18,5 @@ jobs:
         id: release
         uses: googleapis/release-please-action@v4
         with:
-          config-file: hack/release-please-config.json
-          manifest-file: hack/release-please-manifest.json
+          config-file: .github/release-please-config.json
+          manifest-file: .github/release-please-manifest.json

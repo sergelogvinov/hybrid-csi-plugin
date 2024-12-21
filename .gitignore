@@ -9,6 +9,7 @@
 *.dylib
 bin/
 dist/
+hack/
 
 # Test binary, built with `go test -c`
 *.test
