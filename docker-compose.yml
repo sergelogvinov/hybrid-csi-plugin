@@ -1,0 +1,88 @@
+services:
+  base:
+    image: registry.k8s.io/pause:3.10
+    ports:
+      - "8080:8080"
+  plugin:
+    build:
+      context: .
+      target: develop
+    network_mode: "service:base"
+    environment:
+      # NODE_NAME: worker-11
+      KUBECONFIG: /etc/kubernetes/kubeconfig
+      # UNSAFEMOUNT: "true"
+    command:
+      - "make"
+      - "run"
+    volumes:
+      - type: volume
+        source: socket-dir
+        target: /csi
+      - type: bind
+        source: ./hack
+        target: /etc/kubernetes
+      - type: bind
+        source: ./
+        target: /src
+  csi-attacher:
+    image: registry.k8s.io/sig-storage/csi-attacher:v4.8.0
+    network_mode: "service:base"
+    command:
+      - "--v=5"
+      - "--csi-address=unix:///csi/csi.sock"
+      - "--leader-election=false"
+      - "--default-fstype=ext4"
+      - "--kubeconfig=/etc/kubernetes/kubeconfig"
+    volumes:
+      - type: volume
+        source: socket-dir
+        target: /csi
+      - type: bind
+        source: ./hack
+        target: /etc/kubernetes
+  csi-provisioner:
+    image: registry.k8s.io/sig-storage/csi-provisioner:v5.1.0
+    network_mode: "service:base"
+    command:
+      - "--v=5"
+      - "--csi-address=unix:///csi/csi.sock"
+      - "--leader-election=false"
+      - "--default-fstype=ext4"
+      - "--feature-gates=Topology=true"
+      # - "--enable-capacity"
+      # - "--capacity-ownerref-level=-1"
+      # - "--capacity-poll-interval=2m"
+      - "--extra-create-metadata=true"
+      # - "--node-deployment"
+      - "--kubeconfig=/etc/kubernetes/kubeconfig"
+    environment:
+      NAMESPACE: csi-proxmox
+      POD_NAME: csi-provisioner
+      # NODE_NAME: worker-11
+    volumes:
+      - type: volume
+        source: socket-dir
+        target: /csi
+      - type: bind
+        source: ./hack
+        target: /etc/kubernetes
+  # csi-node-driver-registrar:
+  #   image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.11.1
+  #   network_mode: "service:base"
+  #   command:
+  #     - "--v=5"
+  #     - "--csi-address=unix:///csi/csi.sock"
+  #     - "--kubelet-registration-path=/var/lib/kubelet/plugins/csi.proxmox.sinextra.dev/csi.sock"
+  #   environment:
+  #     KUBE_NODE_NAME: worker-11
+  #   volumes:
+  #     - type: volume
+  #       source: socket-dir
+  #       target: /csi
+  #     - type: bind
+  #       source: ./hack
+  #       target: /etc/kubernetes
+
+volumes:
+  socket-dir:
