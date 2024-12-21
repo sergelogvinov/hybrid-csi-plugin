@@ -6,7 +6,7 @@ require (
 	github.com/container-storage-interface/spec v1.11.0
 	github.com/golang/protobuf v1.5.4
 	github.com/kubernetes-csi/csi-lib-utils v0.20.0
-	google.golang.org/grpc v1.69.0
+	google.golang.org/grpc v1.69.2
 	k8s.io/api v0.32.0
 	k8s.io/apimachinery v0.32.0
 	k8s.io/client-go v0.32.0
