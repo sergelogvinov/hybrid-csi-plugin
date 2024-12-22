@@ -25,18 +25,18 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kubernetes-csi/csi-lib-utils/leaderelection"
+	flag "github.com/spf13/pflag"
+	controller "sigs.k8s.io/sig-storage-lib-external-provisioner/v10/controller"
+
 	"github.com/sergelogvinov/hybrid-csi-plugin/pkg/provisioner"
 
-	flag "github.com/spf13/pflag"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
-
-	"github.com/kubernetes-csi/csi-lib-utils/leaderelection"
-	controller "sigs.k8s.io/sig-storage-lib-external-provisioner/v10/controller"
 )
 
 var (
@@ -58,10 +58,11 @@ var (
 )
 
 const (
+	// DriverName is the name of the driver
 	DriverName = "csi.hybrid.sinextra.dev"
 
-	ResyncPeriodOfCsiNodeInformer        = 1 * time.Hour
-	ResyncPeriodOfReferenceGrantInformer = 1 * time.Hour
+	// ResyncPeriodOfCsiNodeInformer is the resync period of the informer for the CSINode objects
+	ResyncPeriodOfCsiNodeInformer = 1 * time.Hour
 )
 
 func main() {
@@ -164,7 +165,7 @@ func main() {
 	} else {
 		// this lock name pattern is also copied from sigs.k8s.io/sig-storage-lib-external-provisioner/controller
 		// to preserve backwards compatibility
-		lockName := strings.Replace(DriverName, "/", "-", -1)
+		lockName := strings.ReplaceAll(DriverName, "/", "-")
 
 		// create a new clientset for leader election
 		leClientset, err := kubernetes.NewForConfig(coreConfig)

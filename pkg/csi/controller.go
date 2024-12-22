@@ -18,7 +18,6 @@ package csi
 
 import (
 	"context"
-	"sync"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/kubernetes-csi/csi-lib-utils/protosanitizer"
@@ -41,9 +40,6 @@ var controllerCaps = []csi.ControllerServiceCapability_RPC_Type{
 // ControllerService is the controller service for the CSI driver
 type ControllerService struct {
 	Kclient clientkubernetes.Interface
-
-	volumeLocks sync.Mutex
-
 	csi.UnimplementedControllerServer
 }
 
@@ -89,14 +85,14 @@ func (d *ControllerService) ControllerGetCapabilities(_ context.Context, _ *csi.
 }
 
 // ControllerPublishVolume publish a volume
-func (d *ControllerService) ControllerPublishVolume(ctx context.Context, request *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
+func (d *ControllerService) ControllerPublishVolume(_ context.Context, request *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
 	klog.V(4).InfoS("ControllerPublishVolume: called", "args", protosanitizer.StripSecrets(request))
 
 	return nil, status.Error(codes.Unimplemented, "")
 }
 
 // ControllerUnpublishVolume unpublish a volume
-func (d *ControllerService) ControllerUnpublishVolume(ctx context.Context, request *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
+func (d *ControllerService) ControllerUnpublishVolume(_ context.Context, request *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
 	klog.V(4).InfoS("ControllerUnpublishVolume: called", "args", protosanitizer.StripSecrets(request))
 
 	return nil, status.Error(codes.Unimplemented, "")

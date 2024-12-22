@@ -19,7 +19,6 @@ package csi
 import (
 	"context"
 	"fmt"
-	"sync"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/kubernetes-csi/csi-lib-utils/protosanitizer"
@@ -55,9 +54,6 @@ var volumeCaps = []csi.VolumeCapability_AccessMode{
 type NodeService struct {
 	nodeID  string
 	kclient kubernetes.Interface
-
-	volumeLocks sync.Mutex
-
 	csi.UnimplementedNodeServer
 }
 

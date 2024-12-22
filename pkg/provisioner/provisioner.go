@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package provisioner contains the Hybrid CSI driver implementation
 package provisioner
 
 import (
@@ -22,8 +23,7 @@ import (
 	"fmt"
 	"time"
 
-	corelisters "k8s.io/client-go/listers/core/v1"
-	storagelistersv1 "k8s.io/client-go/listers/storage/v1"
+	controller "sigs.k8s.io/sig-storage-lib-external-provisioner/v10/controller"
 
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
@@ -33,14 +33,11 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
+	corelisters "k8s.io/client-go/listers/core/v1"
+	storagelistersv1 "k8s.io/client-go/listers/storage/v1"
 	"k8s.io/component-helpers/storage/volume"
 	"k8s.io/klog/v2"
-
-	controller "sigs.k8s.io/sig-storage-lib-external-provisioner/v10/controller"
 )
-
-const annBetaStorageProvisioner = "volume.beta.kubernetes.io/storage-provisioner"
-const annStorageProvisioner = "volume.kubernetes.io/storage-provisioner"
 
 const (
 	// DriverName is the name of the CSI driver
@@ -50,10 +47,14 @@ const (
 
 	defaultCreateProvisionedPVRetryCount = 5
 	defaultCreateProvisionedPVInterval   = 10 * time.Second
+
+	annBetaStorageProvisioner = "volume.beta.kubernetes.io/storage-provisioner"
+	annStorageProvisioner     = "volume.kubernetes.io/storage-provisioner"
 )
 
+// HybridProvisioner is a hybrid provisioner
 type HybridProvisioner struct {
-	ctx    context.Context
+	ctx    context.Context // nolint: containedctx
 	client kubernetes.Interface
 
 	backoff wait.Backoff
@@ -64,6 +65,7 @@ type HybridProvisioner struct {
 	claimLister   corelisters.PersistentVolumeClaimLister
 }
 
+// NewProvisioner creates a new hybrid provisioner
 func NewProvisioner(
 	ctx context.Context,
 	client kubernetes.Interface,
@@ -91,6 +93,14 @@ func NewProvisioner(
 	return p
 }
 
+// Provision creates a volume i.e. the storage asset and returns a PV object
+// for the volume. The provisioner can return an error (e.g. timeout) and state
+// ProvisioningInBackground to tell the controller that provisioning may be in
+// progress after Provision() finishes. The controller will call Provision()
+// again with the same parameters, assuming that the provisioner continues
+// provisioning the volume. The provisioner must return either final error (with
+// ProvisioningFinished) or success eventually, otherwise the controller will try
+// forever (unless FailedProvisionThreshold is set).
 func (p *HybridProvisioner) Provision(ctx context.Context, opts controller.ProvisionOptions) (*corev1.PersistentVolume, controller.ProvisioningState, error) {
 	klog.V(4).InfoS("Provision: called", "PV", opts.PVName, "node", klog.KObj(opts.SelectedNode), "storageClass", klog.KObj(opts.StorageClass))
 
@@ -116,6 +126,8 @@ func (p *HybridProvisioner) Provision(ctx context.Context, opts controller.Provi
 	return pv, controller.ProvisioningFinished, nil
 }
 
+// Delete removes the storage asset that was created by Provision backing the
+// given PV. Does not delete the PV object itself.
 func (p *HybridProvisioner) Delete(_ context.Context, pv *corev1.PersistentVolume) (err error) {
 	klog.V(4).InfoS("Delete: called", "pv", pv.Name)
 
@@ -266,7 +278,7 @@ func (p *HybridProvisioner) createPV(ctx context.Context, opts controller.Provis
 }
 
 func (p *HybridProvisioner) bondPVC(ctx context.Context, opts controller.ProvisionOptions, pvName string, storageClass *storagev1.StorageClass) error {
-	patchPVC := corev1.PersistentVolumeClaim{
+	patch, _ := json.Marshal(&corev1.PersistentVolumeClaim{ // nolint: errcheck,errchkjson
 		ObjectMeta: metav1.ObjectMeta{
 			Annotations: map[string]string{
 				annStorageProvisioner:       storageClass.Provisioner,
@@ -278,9 +290,8 @@ func (p *HybridProvisioner) bondPVC(ctx context.Context, opts controller.Provisi
 		Spec: corev1.PersistentVolumeClaimSpec{
 			VolumeName: pvName,
 		},
-	}
+	})
 
-	patch, _ := json.Marshal(&patchPVC)
 	if _, err := p.client.CoreV1().PersistentVolumeClaims(opts.PVC.Namespace).Patch(ctx, opts.PVC.Name, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
 		return fmt.Errorf("failed to patch PersistentVolumeClaims: %v", err)
 	}
@@ -293,9 +304,4 @@ func (p *HybridProvisioner) bondPVC(ctx context.Context, opts controller.Provisi
 	}
 
 	return nil
-}
-
-func bytesToQuantity(bytes int64) resource.Quantity {
-	quantity := resource.NewQuantity(bytes, resource.BinarySI)
-	return *quantity
 }
