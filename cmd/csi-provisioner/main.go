@@ -19,6 +19,7 @@ package main
 
 import (
 	"context"
+	goflag "flag"
 	"math/rand"
 	"os"
 	"strconv"
@@ -70,6 +71,7 @@ func main() {
 	var err error
 
 	klog.InitFlags(nil)
+	flag.CommandLine.AddGoFlagSet(goflag.CommandLine)
 	flag.Set("logtostderr", "true") //nolint: errcheck
 	flag.Parse()
 
@@ -125,6 +127,9 @@ func main() {
 
 	// claimInformer := factory.Core().V1().PersistentVolumeClaims().Informer()
 	// volumeInformer := factory.Core().V1().PersistentVolumes().Informer()
+	// csiNodeInformer := factory.Storage().V1().CSINodes().Informer()
+
+	// rateLimiter := workqueue.NewItemExponentialFailureRateLimiter(*retryIntervalStart, *retryIntervalMax)
 
 	// Setup options
 	provisionerOptions := []func(*controller.ProvisionController) error{

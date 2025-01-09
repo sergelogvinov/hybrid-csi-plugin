@@ -7,8 +7,11 @@ metadata:
   labels:
     {{- toYaml . | nindent 4 }}
   {{- end }}
-  {{- with $storage.annotations }}
   annotations:
+  {{- if $storage.default }}
+    storageclass.kubernetes.io/is-default-class: "true"
+  {{- end }}
+  {{- with $storage.annotations }}
     {{- toYaml . | nindent 4 }}
   {{- end }}
 provisioner: {{ $.Values.provisionerName }}
@@ -16,10 +19,7 @@ allowVolumeExpansion: true
 volumeBindingMode: WaitForFirstConsumer
 reclaimPolicy: {{ default "Delete" $storage.reclaimPolicy }}
 parameters:
-{{- with $storage.mountOptions }}
-mountOptions:
-  {{- . | toYaml | nindent 2 }}
-{{- end }}
+  storageClasses: {{ $storage.storageClasses | required "Storage classes must be provided." }}
 {{- with $storage.allowedTopologies }}
 allowedTopologies:
   {{- . | toYaml | nindent 2 }}

@@ -5,7 +5,7 @@ kind: Namespace
 metadata:
   name: csi-hybrid
   labels:
-    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/enforce: baseline
     pod-security.kubernetes.io/audit: baseline
     pod-security.kubernetes.io/warn: baseline
 ---
@@ -16,7 +16,7 @@ metadata:
   name: hybrid-csi-plugin-controller
   namespace: csi-hybrid
   labels:
-    helm.sh/chart: hybrid-csi-plugin-0.1.0
+    helm.sh/chart: hybrid-csi-plugin-0.1.1
     app.kubernetes.io/name: hybrid-csi-plugin
     app.kubernetes.io/instance: hybrid-csi-plugin
     app.kubernetes.io/version: "v0.0.1"
@@ -29,7 +29,7 @@ metadata:
   name: hybrid-csi-plugin-node
   namespace: csi-hybrid
   labels:
-    helm.sh/chart: hybrid-csi-plugin-0.1.0
+    helm.sh/chart: hybrid-csi-plugin-0.1.1
     app.kubernetes.io/name: hybrid-csi-plugin
     app.kubernetes.io/instance: hybrid-csi-plugin
     app.kubernetes.io/version: "v0.0.1"
@@ -42,7 +42,7 @@ metadata:
   name: hybrid-csi-plugin-controller
   namespace: csi-hybrid
   labels:
-    helm.sh/chart: hybrid-csi-plugin-0.1.0
+    helm.sh/chart: hybrid-csi-plugin-0.1.1
     app.kubernetes.io/name: hybrid-csi-plugin
     app.kubernetes.io/instance: hybrid-csi-plugin
     app.kubernetes.io/version: "v0.0.1"
@@ -53,7 +53,7 @@ rules:
     verbs: ["get", "list", "watch", "create", "patch", "delete"]
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
-    verbs: ["get", "list", "watch", "update"]
+    verbs: ["get", "list", "watch", "create", "patch", "delete"]
   - apiGroups: [""]
     resources: ["persistentvolumeclaims/status"]
     verbs: ["patch"]
@@ -78,26 +78,6 @@ rules:
     resources: ["volumeattachments/status"]
     verbs: ["patch"]
 ---
-# Source: hybrid-csi-plugin/templates/node-clusterrole.yaml
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: hybrid-csi-plugin-node
-  namespace: csi-hybrid
-  labels:
-    helm.sh/chart: hybrid-csi-plugin-0.1.0
-    app.kubernetes.io/name: hybrid-csi-plugin
-    app.kubernetes.io/instance: hybrid-csi-plugin
-    app.kubernetes.io/version: "v0.0.1"
-    app.kubernetes.io/managed-by: Helm
-rules:
-  - apiGroups:
-      - ""
-    resources:
-      - nodes
-    verbs:
-      - get
----
 # Source: hybrid-csi-plugin/templates/controller-rolebinding.yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -112,20 +92,6 @@ subjects:
     name: hybrid-csi-plugin-controller
     namespace: csi-hybrid
 ---
-# Source: hybrid-csi-plugin/templates/node-rolebinding.yaml
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: hybrid-csi-plugin-node
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: hybrid-csi-plugin-node
-subjects:
-  - kind: ServiceAccount
-    name: hybrid-csi-plugin-node
-    namespace: csi-hybrid
----
 # Source: hybrid-csi-plugin/templates/controller-role.yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -133,7 +99,7 @@ metadata:
   name: hybrid-csi-plugin-controller
   namespace: csi-hybrid
   labels:
-    helm.sh/chart: hybrid-csi-plugin-0.1.0
+    helm.sh/chart: hybrid-csi-plugin-0.1.1
     app.kubernetes.io/name: hybrid-csi-plugin
     app.kubernetes.io/instance: hybrid-csi-plugin
     app.kubernetes.io/version: "v0.0.1"
@@ -168,149 +134,6 @@ subjects:
     name: hybrid-csi-plugin-controller
     namespace: csi-hybrid
 ---
-# Source: hybrid-csi-plugin/templates/node-deployment.yaml
-apiVersion: apps/v1
-kind: DaemonSet
-metadata:
-  name: hybrid-csi-plugin-node
-  namespace: csi-hybrid
-  labels:
-    helm.sh/chart: hybrid-csi-plugin-0.1.0
-    app.kubernetes.io/name: hybrid-csi-plugin
-    app.kubernetes.io/instance: hybrid-csi-plugin
-    app.kubernetes.io/version: "v0.0.1"
-    app.kubernetes.io/managed-by: Helm
-spec:
-  updateStrategy:
-    type: RollingUpdate
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: hybrid-csi-plugin
-      app.kubernetes.io/instance: hybrid-csi-plugin
-      app.kubernetes.io/component: node
-  template:
-    metadata:
-      labels:
-        app.kubernetes.io/name: hybrid-csi-plugin
-        app.kubernetes.io/instance: hybrid-csi-plugin
-        app.kubernetes.io/component: node
-    spec:
-      priorityClassName: system-node-critical
-      enableServiceLinks: false
-      serviceAccountName: hybrid-csi-plugin-node
-      securityContext:
-        runAsUser: 0
-        runAsGroup: 0
-      containers:
-        - name: hybrid-csi-plugin-node
-          securityContext:
-            privileged: true
-            capabilities:
-              drop:
-              - ALL
-              add:
-              - SYS_ADMIN
-              - CHOWN
-              - DAC_OVERRIDE
-            seccompProfile:
-              type: RuntimeDefault
-          image: "ghcr.io/sergelogvinov/hybrid-csi-node:v0.0.1"
-          imagePullPolicy: IfNotPresent
-          args:
-            - "-v=5"
-            - "--csi-address=unix:///csi/csi.sock"
-            - "--node-id=$(NODE_NAME)"
-          env:
-            - name: NODE_NAME
-              valueFrom:
-                fieldRef:
-                  fieldPath: spec.nodeName
-          resources:
-            {}
-          volumeMounts:
-            - name: socket
-              mountPath: /csi
-            - name: kubelet
-              mountPath: /var/lib/kubelet
-              mountPropagation: Bidirectional
-            - name: dev
-              mountPath: /dev
-            - name: sys
-              mountPath: /sys
-        - name: csi-node-driver-registrar
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop:
-              - ALL
-            readOnlyRootFilesystem: true
-            seccompProfile:
-              type: RuntimeDefault
-          image: "registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.9.4"
-          imagePullPolicy: IfNotPresent
-          args:
-            - "-v=5"
-            - "--csi-address=unix:///csi/csi.sock"
-            - "--kubelet-registration-path=/var/lib/kubelet/plugins/csi.hybrid.sinextra.dev/csi.sock"
-          volumeMounts:
-            - name: socket
-              mountPath: /csi
-            - name: registration
-              mountPath: /registration
-          resources:
-            requests:
-              cpu: 10m
-              memory: 16Mi
-        - name: liveness-probe
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop:
-              - ALL
-            readOnlyRootFilesystem: true
-            seccompProfile:
-              type: RuntimeDefault
-          image: "registry.k8s.io/sig-storage/livenessprobe:v2.11.0"
-          imagePullPolicy: IfNotPresent
-          args:
-            - "-v=5"
-            - "--csi-address=unix:///csi/csi.sock"
-          volumeMounts:
-            - name: socket
-              mountPath: /csi
-          resources:
-            requests:
-              cpu: 10m
-              memory: 16Mi
-      volumes:
-        - name: socket
-          hostPath:
-            path: /var/lib/kubelet/plugins/csi.hybrid.sinextra.dev/
-            type: DirectoryOrCreate
-        - name: registration
-          hostPath:
-            path: /var/lib/kubelet/plugins_registry/
-            type: Directory
-        - name: kubelet
-          hostPath:
-            path: /var/lib/kubelet
-            type: Directory
-        - name: dev
-          hostPath:
-            path: /dev
-            type: Directory
-        - name: sys
-          hostPath:
-            path: /sys
-            type: Directory
-      tolerations:
-        - effect: NoSchedule
-          key: node.kubernetes.io/unschedulable
-          operator: Exists
-        - effect: NoSchedule
-          key: node.kubernetes.io/disk-pressure
-          operator: Exists
----
 # Source: hybrid-csi-plugin/templates/controller-deployment.yaml
 apiVersion: apps/v1
 kind: Deployment
@@ -318,7 +141,7 @@ metadata:
   name: hybrid-csi-plugin-controller
   namespace: csi-hybrid
   labels:
-    helm.sh/chart: hybrid-csi-plugin-0.1.0
+    helm.sh/chart: hybrid-csi-plugin-0.1.1
     app.kubernetes.io/name: hybrid-csi-plugin
     app.kubernetes.io/instance: hybrid-csi-plugin
     app.kubernetes.io/version: "v0.0.1"
@@ -352,10 +175,6 @@ spec:
         runAsGroup: 65532
         runAsNonRoot: true
         runAsUser: 65532
-      hostAliases:
-        []
-      initContainers:
-        []
       containers:
         - name: hybrid-csi-plugin-controller
           securityContext:
@@ -370,129 +189,9 @@ spec:
           imagePullPolicy: IfNotPresent
           args:
             - "-v=5"
-            - "--csi-address=unix:///csi/csi.sock"
-            - "--cloud-config="
           ports:
           resources:
-            requests:
-              cpu: 10m
-              memory: 16Mi
-          volumeMounts:
-            - name: socket-dir
-              mountPath: /csi
-            - name: cloud-config
-              mountPath: /etc/hybrid/
-        - name: csi-attacher
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop:
-              - ALL
-            readOnlyRootFilesystem: true
-            seccompProfile:
-              type: RuntimeDefault
-          image: "registry.k8s.io/sig-storage/csi-attacher:v4.4.4"
-          imagePullPolicy: IfNotPresent
-          args:
-            - "-v=5"
-            - "--csi-address=unix:///csi/csi.sock"
-            - "--timeout=3m"
-            - "--leader-election"
-            - "--default-fstype=ext4"
-          volumeMounts:
-            - name: socket-dir
-              mountPath: /csi
-          resources: 
-            requests:
-              cpu: 10m
-              memory: 16Mi
-        - name: csi-provisioner
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop:
-              - ALL
-            readOnlyRootFilesystem: true
-            seccompProfile:
-              type: RuntimeDefault
-          image: "registry.k8s.io/sig-storage/csi-provisioner:v3.6.4"
-          imagePullPolicy: IfNotPresent
-          args:
-            - "-v=5"
-            - "--csi-address=unix:///csi/csi.sock"
-            - "--timeout=3m"
-            - "--leader-election"
-            - "--default-fstype=ext4"
-            - "--feature-gates=Topology=True"
-            - "--enable-capacity"
-            - "--capacity-ownerref-level=2"
-          env:
-            - name: NAMESPACE
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.namespace
-            - name: POD_NAME
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.name
-          volumeMounts:
-            - name: socket-dir
-              mountPath: /csi
-          resources: 
-            requests:
-              cpu: 10m
-              memory: 16Mi
-        - name: csi-resizer
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop:
-              - ALL
-            readOnlyRootFilesystem: true
-            seccompProfile:
-              type: RuntimeDefault
-          image: "registry.k8s.io/sig-storage/csi-resizer:v1.9.4"
-          imagePullPolicy: IfNotPresent
-          args:
-            - "-v=5"
-            - "--csi-address=unix:///csi/csi.sock"
-            - "--timeout=3m"
-            - "--handle-volume-inuse-error=false"
-            - "--leader-election"
-          volumeMounts:
-            - name: socket-dir
-              mountPath: /csi
-          resources: 
-            requests:
-              cpu: 10m
-              memory: 16Mi
-        - name: liveness-probe
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop:
-              - ALL
-            readOnlyRootFilesystem: true
-            seccompProfile:
-              type: RuntimeDefault
-          image: "registry.k8s.io/sig-storage/livenessprobe:v2.11.0"
-          imagePullPolicy: IfNotPresent
-          args:
-            - "-v=5"
-            - "--csi-address=unix:///csi/csi.sock"
-          volumeMounts:
-            - name: socket-dir
-              mountPath: /csi
-          resources: 
-            requests:
-              cpu: 10m
-              memory: 16Mi
-      volumes:
-        - name: socket-dir
-          emptyDir: {}
-        - name: cloud-config
-          secret:
-            secretName: hybrid-csi-plugin
+            null
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname
@@ -511,6 +210,6 @@ metadata:
 spec:
   attachRequired: true
   podInfoOnMount: true
-  storageCapacity: true
+  storageCapacity: false
   volumeLifecycleModes:
-  - Persistent
+    - Persistent

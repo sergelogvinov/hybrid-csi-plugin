@@ -1,22 +1,15 @@
 createNamespace: true
 
-controller:
-  plugin:
-    image:
-      pullPolicy: Always
-      tag: edge
+image:
+  pullPolicy: Always
+  tag: edge
 
-node:
-  plugin:
-    image:
-      pullPolicy: Always
-      tag: edge
+storageClass: []
+#   - name: hybrid
+#     storageClasses: proxmox
 
 nodeSelector:
   node-role.kubernetes.io/control-plane: ""
 tolerations:
   - key: node-role.kubernetes.io/control-plane
     effect: NoSchedule
-
-storageClass:
-  - name: hybrid-data

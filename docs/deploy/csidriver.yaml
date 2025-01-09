@@ -16,6 +16,8 @@ kind: StorageClass
 metadata:
   name: hybrid
 provisioner: csi.hybrid.sinextra.dev
+parameters:
+  storageClasses: proxmox,hcloud-volumes,local-path
 allowVolumeExpansion: true
 volumeBindingMode: WaitForFirstConsumer
 reclaimPolicy: Delete
