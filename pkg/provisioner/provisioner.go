@@ -115,7 +115,7 @@ func (p *HybridProvisioner) Provision(ctx context.Context, opts controller.Provi
 
 	storageClass, err := p.getStorageClassFromNode(opts.SelectedNode, strings.Split(classes, ","))
 	if err != nil {
-		return nil, controller.ProvisioningFinished, err
+		return nil, controller.ProvisioningReschedule, err
 	}
 
 	pv, err := p.createPV(ctx, opts, storageClass)

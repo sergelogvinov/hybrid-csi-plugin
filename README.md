@@ -21,7 +21,56 @@ In short, the Hybrid CSI Plugin simplifies storage management in complex Kuberne
 
 * [Dynamic provisioning](https://kubernetes-csi.github.io/docs/external-provisioner.html): Volumes are created dynamically when `PersistentVolumeClaim` objects are created.
 * [Topology](https://kubernetes-csi.github.io/docs/topology.html): feature to schedule Pod to Node where disk volume pool exists.
-* [Storage capacity](https://kubernetes.io/docs/concepts/storage/storage-capacity/): helps to choose the right storage backend based on the storage capacity.
+
+## Overview
+
+### Storage Class Definition
+
+Storage Class resource:
+
+```yaml
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: hybrid
+parameters:
+  storageClasses: proxmox,hcloud-volumes
+provisioner: csi.hybrid.sinextra.dev
+allowVolumeExpansion: true
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer
+```
+
+Storage parameters:
+* `storageClasses`: Comma-separated list of storage classes, the order is important. The first storage class has the highest priority.
+
+## Deployment examples
+
+Deploy a test statefulSet, it uses the `hybrid` storage class which is defined above.
+
+```shell
+kubectl apply -f https://raw.githubusercontent.com/sergelogvinov/hybrid-csi-plugin/refs/heads/main/docs/deploy/test-statefulset.yaml
+```
+
+Check status of PV and PVC
+
+```shell
+$ kubectl -n default get pods,pvc
+NAME         READY   STATUS    RESTARTS   AGE
+pod/test-0   1/1     Running   0          31s
+pod/test-1   1/1     Running   0          31s
+
+NAME                                   STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+persistentvolumeclaim/storage-test-0   Bound    pvc-64440564-75e9-4926-82ef-280f412b11ee   1Gi        RWO            hybrid         <unset>                 32s
+persistentvolumeclaim/storage-test-1   Bound    pvc-811cc51e-9c9f-4476-92e1-37382b175e7f   10Gi       RWO            hybrid         <unset>                 32s
+
+$ kubectl -n default get pv pvc-64440564-75e9-4926-82ef-280f412b11ee pvc-811cc51e-9c9f-4476-92e1-37382b175e7f
+NAME                                       CAPACITY   ACCESS MODES   RECLAIM POLICY   STATUS   CLAIM                    STORAGECLASS     VOLUMEATTRIBUTESCLASS   REASON   AGE
+pvc-64440564-75e9-4926-82ef-280f412b11ee   1Gi        RWO            Delete           Bound    default/storage-test-0   proxmox          <unset>                          84s
+pvc-811cc51e-9c9f-4476-92e1-37382b175e7f   10Gi       RWO            Delete           Bound    default/storage-test-1   hcloud-volumes   <unset>                          81s
+```
+
+We've deployed a StatefulSet with two pods, each pod has a PVC with a different storage class. The first PVC is bound to a PV created by the `proxmox` storage class, the second PVC is bound to a PV created by the `hcloud-volumes` storage class.
 
 ## FAQ
 
