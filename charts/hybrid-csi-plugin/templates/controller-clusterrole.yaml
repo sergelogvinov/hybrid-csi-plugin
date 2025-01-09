@@ -7,6 +7,9 @@ metadata:
     {{- include "hybrid-csi-plugin.labels" . | nindent 4 }}
 rules:
   - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
     resources: ["persistentvolumes"]
     verbs: ["get", "list", "watch", "create", "patch", "delete"]
   - apiGroups: [""]

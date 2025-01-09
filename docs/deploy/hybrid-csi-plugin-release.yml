@@ -16,7 +16,7 @@ metadata:
   name: hybrid-csi-plugin-controller
   namespace: csi-hybrid
   labels:
-    helm.sh/chart: hybrid-csi-plugin-0.1.1
+    helm.sh/chart: hybrid-csi-plugin-0.1.2
     app.kubernetes.io/name: hybrid-csi-plugin
     app.kubernetes.io/instance: hybrid-csi-plugin
     app.kubernetes.io/version: "v0.0.1"
@@ -29,7 +29,7 @@ metadata:
   name: hybrid-csi-plugin-node
   namespace: csi-hybrid
   labels:
-    helm.sh/chart: hybrid-csi-plugin-0.1.1
+    helm.sh/chart: hybrid-csi-plugin-0.1.2
     app.kubernetes.io/name: hybrid-csi-plugin
     app.kubernetes.io/instance: hybrid-csi-plugin
     app.kubernetes.io/version: "v0.0.1"
@@ -42,12 +42,15 @@ metadata:
   name: hybrid-csi-plugin-controller
   namespace: csi-hybrid
   labels:
-    helm.sh/chart: hybrid-csi-plugin-0.1.1
+    helm.sh/chart: hybrid-csi-plugin-0.1.2
     app.kubernetes.io/name: hybrid-csi-plugin
     app.kubernetes.io/instance: hybrid-csi-plugin
     app.kubernetes.io/version: "v0.0.1"
     app.kubernetes.io/managed-by: Helm
 rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "delete"]
   - apiGroups: [""]
     resources: ["persistentvolumes"]
     verbs: ["get", "list", "watch", "create", "patch", "delete"]
@@ -99,7 +102,7 @@ metadata:
   name: hybrid-csi-plugin-controller
   namespace: csi-hybrid
   labels:
-    helm.sh/chart: hybrid-csi-plugin-0.1.1
+    helm.sh/chart: hybrid-csi-plugin-0.1.2
     app.kubernetes.io/name: hybrid-csi-plugin
     app.kubernetes.io/instance: hybrid-csi-plugin
     app.kubernetes.io/version: "v0.0.1"
@@ -141,7 +144,7 @@ metadata:
   name: hybrid-csi-plugin-controller
   namespace: csi-hybrid
   labels:
-    helm.sh/chart: hybrid-csi-plugin-0.1.1
+    helm.sh/chart: hybrid-csi-plugin-0.1.2
     app.kubernetes.io/name: hybrid-csi-plugin
     app.kubernetes.io/instance: hybrid-csi-plugin
     app.kubernetes.io/version: "v0.0.1"
@@ -185,7 +188,7 @@ spec:
             readOnlyRootFilesystem: true
             seccompProfile:
               type: RuntimeDefault
-          image: "ghcr.io/sergelogvinov/hybrid-csi-controller:v0.0.1"
+          image: "ghcr.io/sergelogvinov/hybrid-csi-provisioner:v0.0.1"
           imagePullPolicy: IfNotPresent
           args:
             - "-v=5"

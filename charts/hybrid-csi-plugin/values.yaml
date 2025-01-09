@@ -5,7 +5,7 @@
 replicaCount: 1
 
 image:
-  repository: ghcr.io/sergelogvinov/hybrid-csi-controller
+  repository: ghcr.io/sergelogvinov/hybrid-csi-provisioner
   pullPolicy: IfNotPresent
   # Overrides the image tag whose default is the chart appVersion.
   tag: ""
