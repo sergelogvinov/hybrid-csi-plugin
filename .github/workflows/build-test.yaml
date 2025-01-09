@@ -41,8 +41,3 @@ jobs:
         run: make images
         env:
           PLATFORM: linux/amd64
-      - name: Check node tools
-        timeout-minutes: 5
-        run: make image-tools-check
-        env:
-          PLATFORM: linux/amd64

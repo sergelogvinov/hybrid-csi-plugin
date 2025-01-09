@@ -24,13 +24,13 @@ RUN make build-all-archs
 
 ########################################
 
-FROM --platform=${TARGETARCH} scratch AS hybrid-csi-controller
+FROM --platform=${TARGETARCH} scratch AS hybrid-csi-provisioner
 LABEL org.opencontainers.image.source="https://github.com/sergelogvinov/hybrid-csi-plugin" \
       org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.description="Hybrid CSI plugin"
 
 COPY --from=gcr.io/distroless/static-debian12:nonroot . .
 ARG TARGETARCH
-COPY --from=builder /src/bin/hybrid-csi-controller-${TARGETARCH} /bin/hybrid-csi-controller
+COPY --from=builder /src/bin/hybrid-csi-provisioner-${TARGETARCH} /bin/hybrid-csi-provisioner
 
-ENTRYPOINT ["/bin/hybrid-csi-controller"]
+ENTRYPOINT ["/bin/hybrid-csi-provisioner"]

@@ -1,8 +1,12 @@
-node:
-  nodeSelector:
-    node.cloudprovider.kubernetes.io/platform: nocloud
-  tolerations:
-    - operator: Exists
+createNamespace: true
 
 storageClass:
   - name: hybrid
+    default: true
+    storageClasses: proxmox
+
+nodeSelector:
+  node-role.kubernetes.io/control-plane: ""
+tolerations:
+  - key: node-role.kubernetes.io/control-plane
+    effect: NoSchedule

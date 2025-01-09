@@ -59,14 +59,14 @@ clean: ## Clean
 
 build-%:
 	CGO_ENABLED=0 GOOS=$(OS) GOARCH=$(ARCH) go build $(GO_LDFLAGS) \
-		-o bin/hybrid-csi-$*-$(ARCH) ./cmd/$*
+		-o bin/hybrid-$*-$(ARCH) ./cmd/$*
 
 .PHONY: build
-build: build-controller ## Build
+build: build-csi-provisioner ## Build
 
 .PHONY: run
-run: build-controller ## Run
-	./bin/hybrid-csi-controller-$(ARCH) -v=5 --metrics-address=:8080
+run: build-provisioner ## Run
+	./bin/hybrid-csi-provisioner-$(ARCH) -v=5 --metrics-address=:8080
 
 .PHONY: lint
 lint: ## Lint Code
@@ -112,9 +112,6 @@ docs:
 		charts/hybrid-csi-plugin > docs/deploy/hybrid-csi-plugin-release.yml
 	helm-docs --sort-values-order=file charts/hybrid-csi-plugin
 
-release-update:
-	git-chglog --config hack/chglog-config.yml -o CHANGELOG.md
-
 ############
 #
 # Docker Abstractions
@@ -139,11 +136,11 @@ image-%:
 
 .PHONY: images-checks
 images-checks: images
-	trivy image --exit-code 1 --ignore-unfixed --severity HIGH,CRITICAL --no-progress $(OCIREPO)/hybrid-csi-controller:$(TAG)
+	trivy image --exit-code 1 --ignore-unfixed --severity HIGH,CRITICAL --no-progress $(OCIREPO)/hybrid-csi-provisioner:$(TAG)
 
 .PHONY: images-cosign
 images-cosign:
-	@cosign sign --yes $(COSING_ARGS) --recursive $(OCIREPO)/hybrid-csi-controller:$(TAG)
+	@cosign sign --yes $(COSING_ARGS) --recursive $(OCIREPO)/hybrid-csi-provisioner:$(TAG)
 
 .PHONY: images
-images: image-hybrid-csi-controller ## Build images
+images: image-hybrid-csi-provisioner ## Build images

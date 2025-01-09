@@ -23,6 +23,6 @@ jobs:
         uses: helm/chart-testing-action@v2.6.1
 
       - name: Run helm chart linter
-        run: ct --config hack/ct.yml lint
+        run: ct --config .github/helm.yml lint
       - name: Run helm template
         run: make helm-unit

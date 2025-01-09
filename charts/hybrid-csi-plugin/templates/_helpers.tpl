@@ -52,13 +52,6 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/component: controller
 {{- end }}
 
-{{- define "hybrid-csi-plugin-node.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "hybrid-csi-plugin.name" . }}
-app.kubernetes.io/instance: {{ .Release.Name }}
-app.kubernetes.io/component: node
-{{- end }}
-
-
 {{/*
 Create the name of the service account to use
 */}}

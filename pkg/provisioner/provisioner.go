@@ -14,13 +14,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package provisioner contains the Hybrid CSI driver implementation
 package provisioner
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	controller "sigs.k8s.io/sig-storage-lib-external-provisioner/v10/controller"
@@ -104,7 +104,16 @@ func NewProvisioner(
 func (p *HybridProvisioner) Provision(ctx context.Context, opts controller.ProvisionOptions) (*corev1.PersistentVolume, controller.ProvisioningState, error) {
 	klog.V(4).InfoS("Provision: called", "PV", opts.PVName, "node", klog.KObj(opts.SelectedNode), "storageClass", klog.KObj(opts.StorageClass))
 
-	storageClass, err := p.scLister.Get("proxmox")
+	if opts.StorageClass == nil {
+		return nil, controller.ProvisioningFinished, fmt.Errorf("storageClass is required")
+	}
+
+	classes, ok := opts.StorageClass.Parameters["storageClasses"]
+	if !ok {
+		return nil, controller.ProvisioningFinished, fmt.Errorf("storageClasses parameter is required")
+	}
+
+	storageClass, err := p.getStorageClassFromNode(opts.SelectedNode, strings.Split(classes, ","))
 	if err != nil {
 		return nil, controller.ProvisioningFinished, err
 	}
@@ -132,6 +141,32 @@ func (p *HybridProvisioner) Delete(_ context.Context, pv *corev1.PersistentVolum
 	klog.V(4).InfoS("Delete: called", "pv", pv.Name)
 
 	return nil
+}
+
+// Get first matched StorageClass from the list of storage classes supported by the selected node
+func (p *HybridProvisioner) getStorageClassFromNode(selectedNode *corev1.Node, storageClasses []string) (*storagev1.StorageClass, error) {
+	selectedCSINode, err := p.csiNodeLister.Get(selectedNode.Name)
+	if err != nil {
+		return nil, fmt.Errorf("error getting CSINode for selected node %q: %v", selectedNode.Name, err)
+	}
+	if selectedCSINode == nil {
+		return nil, fmt.Errorf("CSINode for selected node %q not found", selectedNode.Name)
+	}
+
+	for _, storageClass := range storageClasses {
+		class, err := p.scLister.Get(storageClass)
+		if err != nil {
+			continue
+		}
+
+		for _, driver := range selectedCSINode.Spec.Drivers {
+			if driver.Name == class.Provisioner {
+				return class, nil
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("no matching storage class found for selected node %q", selectedNode.Name)
 }
 
 func (p *HybridProvisioner) createPV(ctx context.Context, opts controller.ProvisionOptions, storageClass *storagev1.StorageClass) (pv *corev1.PersistentVolume, err error) {
