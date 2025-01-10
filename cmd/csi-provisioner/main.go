@@ -64,6 +64,8 @@ var (
 	leaderElectionLeaseDuration = flag.Duration("leader-election-lease-duration", 15*time.Second, "Duration, in seconds, that non-leader candidates will wait to force acquire leadership. Defaults to 15 seconds.")
 	leaderElectionRenewDeadline = flag.Duration("leader-election-renew-deadline", 10*time.Second, "Duration, in seconds, that the acting leader will retry refreshing leadership before giving up. Defaults to 10 seconds.")
 	leaderElectionRetryPeriod   = flag.Duration("leader-election-retry-period", 5*time.Second, "Duration, in seconds, the LeaderElector clients should wait between tries of actions. Defaults to 5 seconds.")
+
+	method = flag.String("method", "auto", "PV provisioner method. Can be 'auto', 'pod' or 'annotation'.")
 )
 
 const (
@@ -90,6 +92,14 @@ func main() {
 	if *showVersion {
 		klog.Infof("Driver name: %s, Driver version %v, GitVersion %s", DriverName, provisioner.DriverVersion, version)
 		os.Exit(0)
+	}
+
+	switch *method {
+	case "auto", "pod", "annotation":
+		klog.Infof("Using '%s' method for PV provisioning", *method)
+	default:
+		klog.Fatalf("Invalid value for method: %s", *method)
+		os.Exit(1)
 	}
 
 	// get the KUBECONFIG from env if specified (useful for local/debug cluster)
@@ -150,7 +160,7 @@ func main() {
 		// controller.VolumesInformer(volumeInformer),
 	}
 
-	csiProvisioner := provisioner.NewProvisioner(ctx, clientset, driverLister, scLister, csiNodeLister, nodeLister, claimLister)
+	csiProvisioner := provisioner.NewProvisioner(ctx, clientset, *method, driverLister, scLister, csiNodeLister, nodeLister, claimLister)
 
 	// Prepare http endpoint for metrics + leader election healthz
 	mux := http.NewServeMux()

@@ -32,6 +32,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
 	corelisters "k8s.io/client-go/listers/core/v1"
 	storagelistersv1 "k8s.io/client-go/listers/storage/v1"
@@ -50,12 +51,19 @@ const (
 
 	annBetaStorageProvisioner = "volume.beta.kubernetes.io/storage-provisioner"
 	annStorageProvisioner     = "volume.kubernetes.io/storage-provisioner"
+	annSelectedNode           = "volume.kubernetes.io/selected-node"
+)
+
+const (
+	methodDefault    = "auto"
+	methodPod        = "pod"
+	methodAnnotation = "annotation"
 )
 
 // HybridProvisioner is a hybrid provisioner
 type HybridProvisioner struct {
-	ctx    context.Context // nolint: containedctx
 	client kubernetes.Interface
+	method string
 
 	backoff wait.Backoff
 
@@ -68,17 +76,26 @@ type HybridProvisioner struct {
 
 // NewProvisioner creates a new hybrid provisioner
 func NewProvisioner(
-	ctx context.Context,
+	_ context.Context,
 	client kubernetes.Interface,
+	method string,
 	driverLister storagelistersv1.CSIDriverLister,
 	scLister storagelistersv1.StorageClassLister,
 	csiNodeLister storagelistersv1.CSINodeLister,
 	nodeLister corelisters.NodeLister,
 	claimLister corelisters.PersistentVolumeClaimLister,
 ) *HybridProvisioner {
+	switch method {
+	case methodDefault, methodPod, methodAnnotation:
+	default:
+		method = methodDefault
+		klog.Warningf("Unknown provisioner method, using %s", method)
+	}
+
 	p := &HybridProvisioner{
-		ctx:    ctx,
 		client: client,
+
+		method: method,
 
 		backoff: wait.Backoff{
 			Duration: defaultCreateProvisionedPVInterval,
@@ -121,17 +138,19 @@ func (p *HybridProvisioner) Provision(ctx context.Context, opts controller.Provi
 		return nil, controller.ProvisioningReschedule, err
 	}
 
-	pv, err := p.createPV(ctx, opts, storageClass)
-	if err != nil {
-		return nil, controller.ProvisioningFinished, err
-	}
+	var pv *corev1.PersistentVolume
 
-	klog.V(4).InfoS("Provision: persistent volume created", "PV", klog.KObj(pv), "storageClass", pv.Spec.StorageClassName)
-
-	// External provisioner can't update annotation on existence PV, so we need to patch PVC to bind it to the PV.
-	err = p.bondPVC(ctx, opts, pv.Name, storageClass)
-	if err != nil {
-		return nil, controller.ProvisioningFinished, err
+	switch p.method {
+	case "auto", "annotation":
+		pv, err = p.createPVbyAnnotation(ctx, opts, storageClass)
+		if err != nil {
+			return nil, controller.ProvisioningFinished, err
+		}
+	case "pod":
+		pv, err = p.createPVbyPOD(ctx, opts, storageClass)
+		if err != nil {
+			return nil, controller.ProvisioningFinished, err
+		}
 	}
 
 	pv.ResourceVersion = ""
@@ -159,6 +178,8 @@ func (p *HybridProvisioner) getStorageClassFromNode(selectedNode *corev1.Node, s
 	for _, storageClass := range storageClasses {
 		class, err := p.scLister.Get(storageClass)
 		if err != nil {
+			klog.V(4).InfoS("storage class is not found", "node", klog.KObj(selectedNode), "storageClass", storageClass)
+
 			continue
 		}
 
@@ -204,10 +225,66 @@ func (p *HybridProvisioner) getStorageClassFromNode(selectedNode *corev1.Node, s
 	return nil, fmt.Errorf("no matching storage class found for selected node %q", selectedNode.Name)
 }
 
-func (p *HybridProvisioner) createPV(ctx context.Context, opts controller.ProvisionOptions, storageClass *storagev1.StorageClass) (pv *corev1.PersistentVolume, err error) {
-	klog.V(4).InfoS("createPV: called", "pvc", klog.KObj(opts.PVC), "node", klog.KObj(opts.SelectedNode), "storageClass", klog.KObj(storageClass))
+func (p *HybridProvisioner) createPVbyAnnotation(ctx context.Context, opts controller.ProvisionOptions, storageClass *storagev1.StorageClass) (pv *corev1.PersistentVolume, err error) {
+	klog.V(4).InfoS("createPVusingAnnotation: called", "pvc", klog.KObj(opts.PVC), "node", klog.KObj(opts.SelectedNode), "storageClass", klog.KObj(storageClass))
 
-	var lastSaveError error
+	pvcreq := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      opts.PVName,
+			Namespace: opts.PVC.Namespace,
+			Annotations: map[string]string{
+				annStorageProvisioner:     storageClass.Provisioner,
+				annBetaStorageProvisioner: storageClass.Provisioner,
+				annSelectedNode:           opts.SelectedNode.Name,
+			},
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes:      opts.PVC.Spec.AccessModes,
+			StorageClassName: &storageClass.Name,
+			Resources:        opts.PVC.Spec.Resources,
+			VolumeMode:       opts.PVC.Spec.VolumeMode,
+		},
+	}
+
+	if _, err := p.claimLister.PersistentVolumeClaims(pvcreq.Namespace).Get(pvcreq.Name); err != nil {
+		if !errors.IsNotFound(err) {
+			return nil, fmt.Errorf("failed to get persistentvolumeclaim: %v", err)
+		}
+
+		_, err = p.client.CoreV1().PersistentVolumeClaims(pvcreq.Namespace).Create(ctx, pvcreq, metav1.CreateOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("failed to create persistentvolumeclaim: %v", err)
+		}
+	}
+
+	var pvc *corev1.PersistentVolumeClaim
+
+	// Wait for the PV to be bound to the PVC
+	pvc, err = p.waitBindPVC(ctx, pvcreq)
+	if err != nil {
+		klog.ErrorS(err, "Error to bind persistent volume", "PVC", klog.KObj(pvcreq), "storageClass", klog.KObj(storageClass))
+		return nil, err
+	}
+
+	pv, err = p.releasePV(ctx, pvc)
+	if err != nil {
+		klog.ErrorS(err, "Error to release persistent volume", "PVC", klog.KObj(pvc), "storageClass", klog.KObj(storageClass))
+		return nil, err
+	}
+
+	klog.V(4).InfoS("Provision: persistent volume created", "PV", klog.KObj(pv), "storageClass", pv.Spec.StorageClassName)
+
+	// External provisioner can't update annotation on existence PV, so we need to patch PVC to bind it to the PV.
+	err = p.bondPVC(ctx, opts, pv.Name, storageClass)
+	if err != nil {
+		return nil, err
+	}
+
+	return pv, nil
+}
+
+func (p *HybridProvisioner) createPVbyPOD(ctx context.Context, opts controller.ProvisionOptions, storageClass *storagev1.StorageClass) (pv *corev1.PersistentVolume, err error) {
+	klog.V(4).InfoS("createPVusingPOD: called", "pvc", klog.KObj(opts.PVC), "node", klog.KObj(opts.SelectedNode), "storageClass", klog.KObj(storageClass))
 
 	pvcreq := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
@@ -276,23 +353,15 @@ func (p *HybridProvisioner) createPV(ctx context.Context, opts controller.Provis
 		return nil, err
 	}
 
+	var (
+		pvc           *corev1.PersistentVolumeClaim
+		lastSaveError error
+	)
+
 	// Wait for the pv to be bound to the pvc
-	var pvc *corev1.PersistentVolumeClaim
-
-	err = wait.ExponentialBackoff(p.backoff, func() (bool, error) {
-		klog.V(4).InfoS("Trying to bind persistent volume", "PVC", klog.KObj(pvcreq), "storageClass", klog.KObj(storageClass))
-
-		if pvc, err = p.claimLister.PersistentVolumeClaims(pvcreq.Namespace).Get(pvcreq.Name); err == nil {
-			if pvc.Status.Phase == corev1.ClaimBound && pvc.Spec.VolumeName != "" {
-				return true, nil
-			}
-		}
-
-		lastSaveError = err
-		return false, nil
-	})
+	pvc, err = p.waitBindPVC(ctx, pvcreq)
 	if err != nil {
-		klog.ErrorS(lastSaveError, "Error to bind persistent volume", "pod", klog.KObj(pod), "PVC", klog.KObj(pvcreq), "storageClass", klog.KObj(storageClass))
+		klog.ErrorS(err, "Error to bind persistent volume", "pod", klog.KObj(pod), "PVC", klog.KObj(pvcreq), "storageClass", klog.KObj(storageClass))
 		return nil, err
 	}
 
@@ -315,33 +384,18 @@ func (p *HybridProvisioner) createPV(ctx context.Context, opts controller.Provis
 		return nil, err
 	}
 
-	patch := []byte(`{"spec":{"persistentVolumeReclaimPolicy":"` + corev1.PersistentVolumeReclaimRetain + `"}}`)
-	if _, err := p.client.CoreV1().PersistentVolumes().Patch(ctx, pvc.Spec.VolumeName, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
-		return nil, fmt.Errorf("failed to patch persistentvolume: %v", err)
-	}
-
-	err = wait.ExponentialBackoff(p.backoff, func() (bool, error) {
-		klog.V(4).InfoS("Trying to delete persistent volume claim", "PVC", klog.KObj(pvcreq))
-
-		policy := metav1.DeletePropagationForeground
-		if err := p.client.CoreV1().PersistentVolumeClaims(pvcreq.Namespace).Delete(ctx, pvcreq.Name, metav1.DeleteOptions{PropagationPolicy: &policy}); err != nil {
-			klog.V(4).ErrorS(err, "Failed to delete persistent volume claim", "PVC", klog.KObj(pvcreq))
-			lastSaveError = err
-
-			return false, nil
-		}
-
-		return true, nil
-	})
+	pv, err = p.releasePV(ctx, pvc)
 	if err != nil {
-		klog.ErrorS(lastSaveError, "Error to delete persistentvolumeclaim", "PVC", klog.KObj(pvcreq))
+		klog.ErrorS(err, "Error to release persistent volume", "PVC", klog.KObj(pvc), "storageClass", klog.KObj(storageClass))
 		return nil, err
 	}
 
-	patch = []byte(`{"spec":{"claimRef":null}}`)
-	pv, err = p.client.CoreV1().PersistentVolumes().Patch(ctx, pvc.Spec.VolumeName, types.MergePatchType, patch, metav1.PatchOptions{})
+	klog.V(4).InfoS("Provision: persistent volume created", "PV", klog.KObj(pv), "storageClass", pv.Spec.StorageClassName)
+
+	// External provisioner can't update annotation on existence PV, so we need to patch PVC to bind it to the PV.
+	err = p.bondPVC(ctx, opts, pv.Name, storageClass)
 	if err != nil {
-		return nil, fmt.Errorf("failed to patch persistentvolume: %v", err)
+		return nil, err
 	}
 
 	return pv, nil
@@ -374,4 +428,71 @@ func (p *HybridProvisioner) bondPVC(ctx context.Context, opts controller.Provisi
 	}
 
 	return nil
+}
+
+func (p *HybridProvisioner) waitBindPVC(ctx context.Context, pvc *corev1.PersistentVolumeClaim) (*corev1.PersistentVolumeClaim, error) {
+	watcher, err := p.client.CoreV1().PersistentVolumeClaims(pvc.Namespace).Watch(ctx, metav1.ListOptions{
+		FieldSelector: "metadata.name=" + pvc.Name,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	defer watcher.Stop()
+
+	timeout := time.After(time.Second * 30)
+
+	for {
+		select {
+		case event, ok := <-watcher.ResultChan():
+			if !ok {
+				return nil, fmt.Errorf("watch channel closed unexpectedly")
+			}
+
+			if event.Type == watch.Modified {
+				obj, ok := event.Object.(*corev1.PersistentVolumeClaim)
+				if ok && obj.Status.Phase == corev1.ClaimBound {
+					return obj, nil
+				}
+			}
+
+		case <-timeout:
+			return nil, fmt.Errorf("timeout waiting for PersistentVolumeClaims %s to be boned", pvc.Name)
+		}
+	}
+}
+
+func (p *HybridProvisioner) releasePV(ctx context.Context, pvc *corev1.PersistentVolumeClaim) (pv *corev1.PersistentVolume, err error) {
+	var lastSaveError error
+
+	patch := []byte(`{"spec":{"persistentVolumeReclaimPolicy":"` + corev1.PersistentVolumeReclaimRetain + `"}}`)
+	if _, err := p.client.CoreV1().PersistentVolumes().Patch(ctx, pvc.Spec.VolumeName, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
+		return nil, fmt.Errorf("failed to patch persistentvolume: %v", err)
+	}
+
+	err = wait.ExponentialBackoff(p.backoff, func() (bool, error) {
+		klog.V(4).InfoS("Trying to delete persistent volume claim", "PVC", klog.KObj(pvc))
+
+		policy := metav1.DeletePropagationForeground
+		if err := p.client.CoreV1().PersistentVolumeClaims(pvc.Namespace).Delete(ctx, pvc.Name, metav1.DeleteOptions{PropagationPolicy: &policy}); err != nil {
+			klog.V(4).ErrorS(err, "Failed to delete persistent volume claim", "PVC", klog.KObj(pvc))
+			lastSaveError = err
+
+			return false, nil
+		}
+
+		return true, nil
+	})
+	if err != nil {
+		klog.ErrorS(lastSaveError, "Error to delete persistentvolumeclaim", "PVC", klog.KObj(pvc))
+		return nil, err
+	}
+
+	patch = []byte(`{"spec":{"claimRef":null}}`)
+	pv, err = p.client.CoreV1().PersistentVolumes().Patch(ctx, pvc.Spec.VolumeName, types.MergePatchType, patch, metav1.PatchOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to patch persistentvolume: %v", err)
+	}
+
+	return pv, nil
 }
