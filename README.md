@@ -24,6 +24,17 @@ In short, the Hybrid CSI Plugin simplifies storage management in complex Kuberne
 
 ## Overview
 
+The plugin does not required any cloud provider specific credentials. It creates PVs based on the storage classes defined in the Storage Class resource.
+
+Installation command:
+
+```shell
+kubectl create ns csi-hybrid
+helm upgrade -i -n csi-hybrid hybrid-csi-plugin oci://ghcr.io/sergelogvinov/charts/hybrid-csi-plugin
+```
+
+For details about how to install and deploy the CSI plugin, see [Installation instruction](docs/install.md).
+
 ### Storage Class Definition
 
 Storage Class resource:

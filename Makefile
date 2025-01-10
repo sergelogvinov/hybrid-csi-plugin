@@ -104,6 +104,7 @@ helm-release: ## Helm Release
 docs:
 	yq -i '.appVersion = "$(TAG)"' charts/hybrid-csi-plugin/Chart.yaml
 	helm template -n csi-hybrid hybrid-csi-plugin \
+		--set createNamespace=true \
 		-f charts/hybrid-csi-plugin/values.edge.yaml \
 		charts/hybrid-csi-plugin > docs/deploy/hybrid-csi-plugin.yml
 	helm template -n csi-hybrid hybrid-csi-plugin \

@@ -4,11 +4,10 @@ This document is a reflection of the current state of the exposed metrics of the
 
 ## Gather metrics
 
-Enabling the metrics is done by setting the `--metrics-address` flag to the desired address and port.
+Enabling the metrics is done by setting the `--http-endpoint` flag to the desired address and port.
 
 ```yaml
-hybrid-csi-controller
-  --metrics-address=8080
+hybrid-csi-controller --http-endpoint=:8080
 ```
 
 ### Helm chart values
