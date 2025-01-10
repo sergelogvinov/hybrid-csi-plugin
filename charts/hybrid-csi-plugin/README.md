@@ -1,10 +1,12 @@
 # hybrid-csi-plugin
 
-![Version: 0.1.3](https://img.shields.io/badge/Version-0.1.3-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.1.0](https://img.shields.io/badge/AppVersion-v0.1.0-informational?style=flat-square)
+![Version: 0.1.4](https://img.shields.io/badge/Version-0.1.4-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.1.0](https://img.shields.io/badge/AppVersion-v0.1.0-informational?style=flat-square)
 
 Container Storage Interface plugin
 
-The Container Storage Interface (CSI) plugin is a specification designed to standardize the way container orchestration systems like Kubernetes, interact with different storage systems. The CSI plugin abstracts the underlying storage, enabling the seamless integration of different storage solutions (such as local block devices, file systems, or cloud-based storage) with containerized applications.
+The Hybrid CSI Plugin is a Container Storage Interface (CSI) plugin that allows using multiple storage backends in one Kubernetes cluster.
+
+In Kubernetes, StatefulSets and many Kubernetes Operators usually require a single storage class to work properly. However, in a hybrid environment, you often have different storage backends assigned to different worker groups. If you want to deploy a StatefulSet across these worker groups in the same cluster, this plugin can help you.
 
 **Homepage:** <https://github.com/sergelogvinov/hybrid-csi-plugin>
 
@@ -28,6 +30,24 @@ kubectl create ns csi-hybrid
 helm upgrade -i --namespace=csi-hybrid \
     hybrid-csi-plugin oci://ghcr.io/sergelogvinov/charts/hybrid-csi-plugin
 ```
+
+Create StorageClass resource:
+
+```yaml
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: hybrid
+parameters:
+  storageClasses: proxmox,hcloud-volumes
+provisioner: csi.hybrid.sinextra.dev
+allowVolumeExpansion: true
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer
+```
+
+Storage parameters:
+* `storageClasses`: Comma-separated list of storage classes, the order is important. The first storage class has the highest priority.
 
 ## Values
 
