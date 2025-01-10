@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/sergelogvinov/hybrid-csi-plugin/compare/v0.1.0...v0.1.1) (2025-01-10)
+
+
+### Bug Fixes
+
+* csidrivers permission ([2978cab](https://github.com/sergelogvinov/hybrid-csi-plugin/commit/2978cab121d46d4c800a49f934cc3e155c68778b))
+
 ## [0.1.0](https://github.com/sergelogvinov/hybrid-csi-plugin/compare/v0.0.1...v0.1.0) (2025-01-10)
 
 
