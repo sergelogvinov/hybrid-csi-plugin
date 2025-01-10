@@ -7,5 +7,5 @@ git tag v0.0.2
 make helm-unit docs
 
 git add .
-git commit
+git commit -s --amend
 ```

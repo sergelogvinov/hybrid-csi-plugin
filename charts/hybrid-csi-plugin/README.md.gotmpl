@@ -23,7 +23,7 @@ The Container Storage Interface (CSI) plugin is a specification designed to stan
 kubectl create ns csi-hybrid
 
 # Install hybrid CSI hybrid
-helm upgrade -i --namespace=csi-hybrid -f hybrid-csi.yaml \
+helm upgrade -i --namespace=csi-hybrid \
     hybrid-csi-plugin oci://ghcr.io/sergelogvinov/charts/hybrid-csi-plugin
 ```
 
