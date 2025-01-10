@@ -162,6 +162,33 @@ func (p *HybridProvisioner) getStorageClassFromNode(selectedNode *corev1.Node, s
 			continue
 		}
 
+		if len(class.AllowedTopologies) > 0 {
+			topologyKeys := getTopologyKeys(selectedCSINode, class.Provisioner)
+
+			selectedTopology, isMissingKey := getTopologyFromNode(selectedNode, topologyKeys)
+			if isMissingKey {
+				klog.V(5).InfoS("getTopologyFromNode key is missing", "node", klog.KObj(selectedNode), "storageClass", storageClass)
+
+				continue
+			}
+
+			allowedTopologiesFlatten := flatten(class.AllowedTopologies)
+
+			found := false
+			for _, t := range allowedTopologiesFlatten {
+				if t.subset(selectedTopology) {
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				klog.V(4).InfoS("topology is not in allowed", "node", klog.KObj(selectedNode), "storageClass", storageClass, "topology", selectedTopology)
+
+				continue
+			}
+		}
+
 		if driver, err := p.driverLister.Get(class.Provisioner); err != nil || driver == nil {
 			// Provisioner is not a CSI driver
 			return class, nil // nolint: nilerr

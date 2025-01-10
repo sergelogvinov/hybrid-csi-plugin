@@ -10,14 +10,34 @@ spec:
   volumeLifecycleModes:
     - Persistent
 ---
-# Source: hybrid-csi-plugin/templates/storageclass.yaml
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
   name: hybrid
 provisioner: csi.hybrid.sinextra.dev
 parameters:
-  storageClasses: proxmox,hcloud-volumes,local-path
+  storageClasses: proxmox-test,local-path
 allowVolumeExpansion: true
 volumeBindingMode: WaitForFirstConsumer
 reclaimPolicy: Delete
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: proxmox-test
+  annotations:
+    resize.topolvm.io/enabled: "true"
+provisioner: csi.proxmox.sinextra.dev
+parameters:
+  storage: lvm
+allowVolumeExpansion: true
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer
+allowedTopologies:
+  - matchLabelExpressions:
+      - key: topology.kubernetes.io/region
+        values:
+          - fsn1
+      - key: topology.kubernetes.io/zone
+        values:
+          - hvm-1
