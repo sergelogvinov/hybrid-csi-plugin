@@ -59,6 +59,7 @@ type HybridProvisioner struct {
 
 	backoff wait.Backoff
 
+	driverLister  storagelistersv1.CSIDriverLister
 	scLister      storagelistersv1.StorageClassLister
 	csiNodeLister storagelistersv1.CSINodeLister
 	nodeLister    corelisters.NodeLister
@@ -69,6 +70,7 @@ type HybridProvisioner struct {
 func NewProvisioner(
 	ctx context.Context,
 	client kubernetes.Interface,
+	driverLister storagelistersv1.CSIDriverLister,
 	scLister storagelistersv1.StorageClassLister,
 	csiNodeLister storagelistersv1.CSINodeLister,
 	nodeLister corelisters.NodeLister,
@@ -84,6 +86,7 @@ func NewProvisioner(
 			Steps:    defaultCreateProvisionedPVRetryCount,
 		},
 
+		driverLister:  driverLister,
 		scLister:      scLister,
 		csiNodeLister: csiNodeLister,
 		nodeLister:    nodeLister,
@@ -157,6 +160,11 @@ func (p *HybridProvisioner) getStorageClassFromNode(selectedNode *corev1.Node, s
 		class, err := p.scLister.Get(storageClass)
 		if err != nil {
 			continue
+		}
+
+		if driver, err := p.driverLister.Get(class.Provisioner); err != nil || driver == nil {
+			// Provisioner is not a CSI driver
+			return class, nil // nolint: nilerr
 		}
 
 		for _, driver := range selectedCSINode.Spec.Drivers {
