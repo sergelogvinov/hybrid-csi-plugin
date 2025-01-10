@@ -21,14 +21,18 @@ import (
 	"context"
 	goflag "flag"
 	"math/rand"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/kubernetes-csi/csi-lib-utils/leaderelection"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	flag "github.com/spf13/pflag"
 	controller "sigs.k8s.io/sig-storage-lib-external-provisioner/v10/controller"
+	libmetrics "sigs.k8s.io/sig-storage-lib-external-provisioner/v10/controller/metrics"
 
 	"github.com/sergelogvinov/hybrid-csi-plugin/pkg/provisioner"
 
@@ -37,6 +41,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/component-base/metrics/legacyregistry"
 	"k8s.io/klog/v2"
 )
 
@@ -50,6 +55,9 @@ var (
 	kubeconfig   = flag.String("kubeconfig", "", "Absolute path to the kubeconfig file. Either this or master needs to be set if the provisioner is being run out of cluster.")
 	kubeAPIQPS   = flag.Float32("kube-api-qps", 5, "QPS to use while communicating with the kubernetes apiserver. Defaults to 5.0.")
 	kubeAPIBurst = flag.Int("kube-api-burst", 10, "Burst to use while communicating with the kubernetes apiserver. Defaults to 10.")
+
+	httpEndpoint = flag.String("http-endpoint", "", "The TCP network address where the HTTP server for diagnostics, including pprof, metrics and leader election health check, will listen (example: `:8080`). The default is empty string, which means the server is disabled.")
+	metricsPath  = flag.String("metrics-path", "/metrics", "The HTTP path where prometheus metrics will be exposed. Default is `/metrics`.")
 
 	enableLeaderElection        = flag.Bool("leader-election", false, "Enables leader election. If leader election is enabled, additional RBAC rules are required. Please refer to the Kubernetes CSI documentation for instructions on setting up these RBAC rules.")
 	leaderElectionNamespace     = flag.String("leader-election-namespace", "", "Namespace where the leader election resource lives. Defaults to the pod namespace if not set.")
@@ -143,6 +151,46 @@ func main() {
 
 	csiProvisioner := provisioner.NewProvisioner(ctx, clientset, scLister, csiNodeLister, nodeLister, claimLister)
 
+	// Prepare http endpoint for metrics + leader election healthz
+	mux := http.NewServeMux()
+	gatherers := prometheus.Gatherers{
+		// For workqueue and leader election metrics, set up via the anonymous imports of:
+		// https://github.com/kubernetes/kubernetes/blob/master/staging/src/k8s.io/component-base/metrics/prometheus/workqueue/metrics.go
+		// https://github.com/kubernetes/kubernetes/blob/master/staging/src/k8s.io/component-base/metrics/prometheus/clientgo/leaderelection/metrics.go
+		//
+		// Also to happens to include Go runtime and process metrics:
+		// https://github.com/kubernetes/kubernetes/blob/9780d88cb6a4b5b067256ecb4abf56892093ee87/staging/src/k8s.io/component-base/metrics/legacyregistry/registry.go#L46-L49
+		legacyregistry.DefaultGatherer,
+	}
+
+	if *httpEndpoint != "" {
+		m := libmetrics.New("controller")
+		reg := prometheus.NewRegistry()
+		reg.MustRegister([]prometheus.Collector{
+			m.PersistentVolumeClaimProvisionTotal,
+			m.PersistentVolumeClaimProvisionFailedTotal,
+			m.PersistentVolumeClaimProvisionDurationSeconds,
+			m.PersistentVolumeDeleteTotal,
+			m.PersistentVolumeDeleteFailedTotal,
+			m.PersistentVolumeDeleteDurationSeconds,
+		}...)
+		provisionerOptions = append(provisionerOptions, controller.MetricsInstance(m))
+		gatherers = append(gatherers, reg)
+
+		mux.Handle(*metricsPath,
+			promhttp.InstrumentMetricHandler(
+				reg,
+				promhttp.HandlerFor(gatherers, promhttp.HandlerOpts{})))
+
+		go func() {
+			klog.Infof("ServeMux listening at %q", *httpEndpoint)
+			err := http.ListenAndServe(*httpEndpoint, mux)
+			if err != nil {
+				klog.Fatalf("Failed to start HTTP server at specified address (%q) and metrics path (%q): %s", *httpEndpoint, *metricsPath, err)
+			}
+		}()
+	}
+
 	provisionController := controller.NewProvisionController(
 		klog.FromContext(ctx),
 		clientset,
@@ -179,6 +227,10 @@ func main() {
 		}
 
 		le := leaderelection.NewLeaderElection(leClientset, lockName, run)
+
+		if *httpEndpoint != "" {
+			le.PrepareHealthCheck(mux, leaderelection.DefaultHealthCheckTimeout)
+		}
 
 		if *leaderElectionNamespace != "" {
 			le.WithNamespace(*leaderElectionNamespace)

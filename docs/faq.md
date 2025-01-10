@@ -4,5 +4,5 @@
 
 ```shell
 kubectl get CSIDriver
-kubectl get CSINode
+kubectl get CSINode -ocustom-columns=NODE:.metadata.name,DRV:.spec.drivers
 ```
