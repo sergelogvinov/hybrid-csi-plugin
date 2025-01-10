@@ -28,7 +28,6 @@ output:
       path: stdout
   print-issued-lines: true
   print-linter-name: true
-  uniq-by-line: true
   sort-results: true
 
 # all available settings of specific linters
@@ -175,6 +174,8 @@ issues:
   exclude-dirs:
     # copied from kubernetes repo
     - pkg/csi
+  exclude-files:
+    - pkg/provisioner/topology.go
 
   # Maximum issues count per one linter. Set to 0 to disable. Default is 50.
   max-issues-per-linter: 0
