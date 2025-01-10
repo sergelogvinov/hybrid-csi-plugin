@@ -16,7 +16,7 @@ metadata:
   name: hybrid
 provisioner: csi.hybrid.sinextra.dev
 parameters:
-  storageClasses: proxmox-test,local-path
+  storageClasses: proxmox-test,proxmox,hcloud-volumes,local-path
 allowVolumeExpansion: true
 volumeBindingMode: WaitForFirstConsumer
 reclaimPolicy: Delete
