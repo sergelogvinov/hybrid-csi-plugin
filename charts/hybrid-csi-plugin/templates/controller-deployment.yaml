@@ -48,7 +48,7 @@ spec:
           args:
             - "-v={{ .Values.logVerbosityLevel }}"
             {{- if .Values.metrics.enabled }}
-            - "--metrics-address=:{{ .Values.metrics.port }}"
+            - "--http-endpoint=:{{ .Values.metrics.port }}"
             {{- end }}
           ports:
             {{- if .Values.metrics.enabled }}
