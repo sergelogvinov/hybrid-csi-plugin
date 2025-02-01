@@ -6,7 +6,8 @@ require (
 	github.com/container-storage-interface/spec v1.11.0
 	github.com/golang/protobuf v1.5.4
 	github.com/kubernetes-csi/csi-lib-utils v0.20.0
-	github.com/spf13/pflag v1.0.5
+	github.com/prometheus/client_golang v1.20.5
+	github.com/spf13/pflag v1.0.6
 	google.golang.org/grpc v1.69.2
 	k8s.io/api v0.32.0
 	k8s.io/apimachinery v0.32.0
@@ -42,7 +43,6 @@ require (
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
-	github.com/prometheus/client_golang v1.20.5 // indirect
 	github.com/prometheus/client_model v0.6.1 // indirect
 	github.com/prometheus/common v0.61.0 // indirect
 	github.com/prometheus/procfs v0.15.1 // indirect
