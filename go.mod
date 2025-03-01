@@ -5,7 +5,7 @@ go 1.23.4
 require (
 	github.com/container-storage-interface/spec v1.11.0
 	github.com/golang/protobuf v1.5.4
-	github.com/kubernetes-csi/csi-lib-utils v0.20.0
+	github.com/kubernetes-csi/csi-lib-utils v0.21.0
 	github.com/prometheus/client_golang v1.20.5
 	github.com/spf13/pflag v1.0.6
 	google.golang.org/grpc v1.70.0
