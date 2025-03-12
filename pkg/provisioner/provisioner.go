@@ -421,8 +421,29 @@ func (p *HybridProvisioner) bondPVC(ctx context.Context, opts controller.Provisi
 	}
 
 	if storageClass.ReclaimPolicy != nil && *storageClass.ReclaimPolicy == corev1.PersistentVolumeReclaimDelete {
-		patch := []byte(`{"spec":{"persistentVolumeReclaimPolicy":"` + corev1.PersistentVolumeReclaimDelete + `"}}`)
-		if _, err := p.client.CoreV1().PersistentVolumes().Patch(ctx, pvName, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
+		patch := fmt.Sprintf(
+			`{
+				"spec":
+				{
+					"persistentVolumeReclaimPolicy":"%s",
+					"claimRef":
+					{
+						"apiVersion":"%s",
+						"kind":"%s",
+						"name":"%s",
+						"namespace":"%s",
+						"uid":"%s"
+					}
+				}
+			}`,
+			corev1.PersistentVolumeReclaimDelete,
+			opts.PVC.APIVersion,
+			opts.PVC.Kind,
+			opts.PVC.Name,
+			opts.PVC.Namespace,
+			opts.PVC.UID,
+		)
+		if _, err := p.client.CoreV1().PersistentVolumes().Patch(ctx, pvName, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
 			return fmt.Errorf("failed to patch PersistentVolume: %v", err)
 		}
 	}
@@ -464,10 +485,27 @@ func (p *HybridProvisioner) waitBindPVC(ctx context.Context, pvc *corev1.Persist
 
 func (p *HybridProvisioner) releasePV(ctx context.Context, pvc *corev1.PersistentVolumeClaim) (pv *corev1.PersistentVolume, err error) {
 	var lastSaveError error
+	var newFinalizers []string
+	var patchStr string
 
 	patch := []byte(`{"spec":{"persistentVolumeReclaimPolicy":"` + corev1.PersistentVolumeReclaimRetain + `"}}`)
 	if _, err := p.client.CoreV1().PersistentVolumes().Patch(ctx, pvc.Spec.VolumeName, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
 		return nil, fmt.Errorf("failed to patch persistentvolume: %v", err)
+	}
+
+	for _, f := range pvc.Finalizers {
+		// Remove kubernetes.io/pvc-protection to avoid PV-controller to rebind PV to Terminating PVC usec for provisioning.
+		if f != "kubernetes.io/pvc-protection" {
+			newFinalizers = append(newFinalizers, f)
+		}
+	}
+	if len(newFinalizers) > 0 {
+		patchStr = fmt.Sprintf(`{"metadata": {"finalizers": ["%s"]}}`, strings.Join(newFinalizers, `", "`))
+	} else {
+		patchStr = `{"metadata":{"finalizers":null}}`
+	}
+	if _, err := p.client.CoreV1().PersistentVolumeClaims(pvc.Namespace).Patch(ctx, pvc.Name, types.MergePatchType, []byte(patchStr), metav1.PatchOptions{}); err != nil {
+		return nil, fmt.Errorf("failed to remove finalizer from persistentvolumeClaim: %v", err)
 	}
 
 	err = wait.ExponentialBackoff(p.backoff, func() (bool, error) {
