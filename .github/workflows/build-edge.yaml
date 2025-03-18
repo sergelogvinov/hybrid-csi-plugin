@@ -61,5 +61,6 @@ jobs:
         with:
           package-name: hybrid-csi-provisioner
           package-type: container
+          min-versions-to-keep: 10
           delete-only-untagged-versions: 'true'
         continue-on-error: true
