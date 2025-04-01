@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.2.0](https://github.com/sergelogvinov/hybrid-csi-plugin/compare/v0.1.0...v0.2.0) (2025-04-01)
+
+
+### Features
+
+* **chart:** add labels for controller pod ([4b64c88](https://github.com/sergelogvinov/hybrid-csi-plugin/commit/4b64c88408d153c9833b6ef121c6861a9bdcd2ce))
+
+
+### Bug Fixes
+
+* csidrivers permission ([2978cab](https://github.com/sergelogvinov/hybrid-csi-plugin/commit/2978cab121d46d4c800a49f934cc3e155c68778b))
+* gh-action cleanup ([cbb73fb](https://github.com/sergelogvinov/hybrid-csi-plugin/commit/cbb73fb1381b35f6f3052cda196178a9b2e069ce))
+* helm chart image ([41b6995](https://github.com/sergelogvinov/hybrid-csi-plugin/commit/41b69954fd31a512bcf138e6ad00193509164edb))
+* helm chart metrics ([f2dcce3](https://github.com/sergelogvinov/hybrid-csi-plugin/commit/f2dcce31b3183f184ee0447ce185aec0bb757f6a))
+* **main:** avoid race conditions in releasePV and bondPVC functions ([2205382](https://github.com/sergelogvinov/hybrid-csi-plugin/commit/22053820eeb0f0626cf35539d1576d2a4050b1d5)), closes [#25](https://github.com/sergelogvinov/hybrid-csi-plugin/issues/25)
+
 ## [0.1.0](https://github.com/sergelogvinov/hybrid-csi-plugin/compare/v0.0.1...v0.1.0) (2025-01-10)
 
 
