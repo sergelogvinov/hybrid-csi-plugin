@@ -63,4 +63,5 @@ jobs:
           package-type: container
           min-versions-to-keep: 10
           delete-only-untagged-versions: 'true'
+          ignore-versions: '^v([0-9]+\\.)'
         continue-on-error: true
