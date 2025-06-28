@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/sergelogvinov/hybrid-csi-plugin/compare/v0.2.0...v0.2.1) (2025-06-28)
+
+
+### Bug Fixes
+
+* clean old images ([9a6ef50](https://github.com/sergelogvinov/hybrid-csi-plugin/commit/9a6ef5059cfb0e44c4d1dfd6bed7e2e3c7f9857e))
+
 ## [0.2.0](https://github.com/sergelogvinov/hybrid-csi-plugin/compare/v0.1.0...v0.2.0) (2025-04-01)
 
 
