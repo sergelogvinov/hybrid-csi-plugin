@@ -154,6 +154,7 @@ func (p *HybridProvisioner) Provision(ctx context.Context, opts controller.Provi
 	}
 
 	pv.ResourceVersion = ""
+
 	return pv, controller.ProvisioningFinished, nil
 }
 
@@ -171,6 +172,7 @@ func (p *HybridProvisioner) getStorageClassFromNode(selectedNode *corev1.Node, s
 	if err != nil {
 		return nil, fmt.Errorf("error getting CSINode for selected node %q: %v", selectedNode.Name, err)
 	}
+
 	if selectedCSINode == nil {
 		return nil, fmt.Errorf("CSINode for selected node %q not found", selectedNode.Name)
 	}
@@ -196,6 +198,7 @@ func (p *HybridProvisioner) getStorageClassFromNode(selectedNode *corev1.Node, s
 			allowedTopologiesFlatten := flatten(class.AllowedTopologies)
 
 			found := false
+
 			for _, t := range allowedTopologiesFlatten {
 				if t.subset(selectedTopology) {
 					found = true
@@ -484,9 +487,11 @@ func (p *HybridProvisioner) waitBindPVC(ctx context.Context, pvc *corev1.Persist
 }
 
 func (p *HybridProvisioner) releasePV(ctx context.Context, pvc *corev1.PersistentVolumeClaim) (pv *corev1.PersistentVolume, err error) {
-	var lastSaveError error
-	var newFinalizers []string
-	var patchStr string
+	var (
+		lastSaveError error
+		newFinalizers []string
+		patchStr      string
+	)
 
 	patch := []byte(`{"spec":{"persistentVolumeReclaimPolicy":"` + corev1.PersistentVolumeReclaimRetain + `"}}`)
 	if _, err := p.client.CoreV1().PersistentVolumes().Patch(ctx, pvc.Spec.VolumeName, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
@@ -499,11 +504,13 @@ func (p *HybridProvisioner) releasePV(ctx context.Context, pvc *corev1.Persisten
 			newFinalizers = append(newFinalizers, f)
 		}
 	}
+
 	if len(newFinalizers) > 0 {
 		patchStr = fmt.Sprintf(`{"metadata": {"finalizers": ["%s"]}}`, strings.Join(newFinalizers, `", "`))
 	} else {
 		patchStr = `{"metadata":{"finalizers":null}}`
 	}
+
 	if _, err := p.client.CoreV1().PersistentVolumeClaims(pvc.Namespace).Patch(ctx, pvc.Name, types.MergePatchType, []byte(patchStr), metav1.PatchOptions{}); err != nil {
 		return nil, fmt.Errorf("failed to remove finalizer from persistentvolumeClaim: %v", err)
 	}
@@ -527,6 +534,7 @@ func (p *HybridProvisioner) releasePV(ctx context.Context, pvc *corev1.Persisten
 	}
 
 	patch = []byte(`{"spec":{"claimRef":null}}`)
+
 	pv, err = p.client.CoreV1().PersistentVolumes().Patch(ctx, pvc.Spec.VolumeName, types.MergePatchType, patch, metav1.PatchOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to patch persistentvolume: %v", err)
