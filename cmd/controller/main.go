@@ -94,7 +94,11 @@ func main() {
 		klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 	}
 
-	listener, err := net.Listen(scheme, addr)
+	ctx := context.Background()
+
+	listenConfig := new(net.ListenConfig)
+
+	listener, err := listenConfig.Listen(ctx, scheme, addr)
 	if err != nil {
 		klog.ErrorS(err, "Failed to listen", "address", *csiEndpoint)
 		klog.FlushAndExit(klog.ExitFlushTimeout, 1)

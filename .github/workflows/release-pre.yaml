@@ -10,7 +10,7 @@ jobs:
     name: "Check release docs"
     timeout-minutes: 15
     runs-on: ubuntu-24.04
-    if:  startsWith(github.head_ref, 'release-')
+    if: startsWith(github.head_ref, 'release-')
     permissions:
       contents: read
       packages: write
@@ -25,7 +25,7 @@ jobs:
       #   id: release
       #   run: echo "TAG=v${GITHUB_HEAD_REF:8}" >> "$GITHUB_ENV"
       - name: Release version
-        if:  startsWith(github.head_ref, 'release-please')
+        if: startsWith(github.head_ref, 'release-please')
         run: jq -r '"TAG=v"+.[]' .github/release-please-manifest.json >> "$GITHUB_ENV"
 
       - name: Helm docs

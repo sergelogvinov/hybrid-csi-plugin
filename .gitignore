@@ -18,7 +18,7 @@ hack/
 *.out
 
 # Dependency directories (remove the comment below to include it)
-# vendor/
+vendor/
 
 # Go workspace file
 go.work
@@ -27,4 +27,6 @@ go.work
 /cosign.key
 /cosign.pub
 
-.idea
+# IDEs and editors
+/.idea
+/.vscode/

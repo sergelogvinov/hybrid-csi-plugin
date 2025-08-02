@@ -65,8 +65,8 @@ build-%:
 build: build-csi-provisioner ## Build
 
 .PHONY: run
-run: build-provisioner ## Run
-	./bin/hybrid-csi-provisioner-$(ARCH) -v=5 --metrics-address=:8080
+run: build-csi-provisioner ## Run
+	./bin/hybrid-csi-provisioner-$(ARCH) -v=5 --http-endpoint=:8080
 
 .PHONY: lint
 lint: ## Lint Code

@@ -77,8 +77,10 @@ const (
 )
 
 func main() {
-	var config *rest.Config
-	var err error
+	var (
+		config *rest.Config
+		err    error
+	)
 
 	klog.InitFlags(nil)
 	flag.CommandLine.AddGoFlagSet(goflag.CommandLine)
@@ -107,16 +109,20 @@ func main() {
 
 	if kubeconfigEnv != "" {
 		klog.Infof("Found KUBECONFIG environment variable set, using that..")
+
 		kubeconfig = &kubeconfigEnv
 	}
 
 	if *master != "" || *kubeconfig != "" {
 		klog.Infof("Either master or kubeconfig specified. building kube config from that..")
+
 		config, err = clientcmd.BuildConfigFromFlags(*master, *kubeconfig)
 	} else {
 		klog.Infof("Building kube configs for running in cluster...")
+
 		config, err = rest.InClusterConfig()
 	}
+
 	if err != nil {
 		klog.Fatalf("Failed to create config: %v", err)
 	}
@@ -126,6 +132,7 @@ func main() {
 
 	coreConfig := rest.CopyConfig(config)
 	coreConfig.ContentType = runtime.ContentTypeProtobuf
+
 	clientset, err := kubernetes.NewForConfig(coreConfig)
 	if err != nil {
 		klog.ErrorS(err, "Failed to create a Clientset")
@@ -195,6 +202,7 @@ func main() {
 
 		go func() {
 			klog.Infof("ServeMux listening at %q", *httpEndpoint)
+
 			err := http.ListenAndServe(*httpEndpoint, mux)
 			if err != nil {
 				klog.Fatalf("Failed to start HTTP server at specified address (%q) and metrics path (%q): %s", *httpEndpoint, *metricsPath, err)
@@ -214,6 +222,7 @@ func main() {
 
 	run := func(ctx context.Context) {
 		factory.Start(ctx.Done())
+
 		cacheSyncResult := factory.WaitForCacheSync(ctx.Done())
 		for _, v := range cacheSyncResult {
 			if !v {
