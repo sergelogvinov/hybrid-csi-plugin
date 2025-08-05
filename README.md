@@ -1,7 +1,5 @@
 # Hybrid CSI Plugin
 
-Status: **Alpha**
-
 The Hybrid CSI Plugin is a Container Storage Interface (CSI) plugin that allows using multiple storage backends in one Kubernetes cluster. This means you can connect different types of storage systems and use them for specific workloads based on their needs.
 
 In Kubernetes, StatefulSets and many Kubernetes Operators usually require a single storage class to work properly. However, in a hybrid environment, you often have different storage backends assigned to different worker groups. If you want to deploy a StatefulSet across these worker groups in the same cluster, this plugin can help you.
