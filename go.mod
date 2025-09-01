@@ -8,7 +8,7 @@ require (
 	github.com/kubernetes-csi/csi-lib-utils v0.22.0
 	github.com/prometheus/client_golang v1.23.0
 	github.com/spf13/pflag v1.0.7
-	google.golang.org/grpc v1.74.2
+	google.golang.org/grpc v1.75.0
 	k8s.io/api v0.33.3
 	k8s.io/apimachinery v0.33.3
 	k8s.io/client-go v0.33.3
@@ -45,8 +45,8 @@ require (
 	github.com/prometheus/common v0.65.0 // indirect
 	github.com/prometheus/procfs v0.17.0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
-	go.opentelemetry.io/otel v1.36.0 // indirect
-	go.opentelemetry.io/otel/trace v1.36.0 // indirect
+	go.opentelemetry.io/otel v1.37.0 // indirect
+	go.opentelemetry.io/otel/trace v1.37.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
 	golang.org/x/mod v0.26.0 // indirect
 	golang.org/x/net v0.42.0 // indirect
