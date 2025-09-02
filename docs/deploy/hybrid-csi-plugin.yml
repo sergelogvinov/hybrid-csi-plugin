@@ -16,10 +16,10 @@ metadata:
   name: hybrid-csi-plugin-controller
   namespace: csi-hybrid
   labels:
-    helm.sh/chart: hybrid-csi-plugin-0.1.8
+    helm.sh/chart: hybrid-csi-plugin-0.1.9
     app.kubernetes.io/name: hybrid-csi-plugin
     app.kubernetes.io/instance: hybrid-csi-plugin
-    app.kubernetes.io/version: "v0.2.1"
+    app.kubernetes.io/version: "v0.3.0"
     app.kubernetes.io/managed-by: Helm
 ---
 # Source: hybrid-csi-plugin/templates/controller-clusterrole.yaml
@@ -29,10 +29,10 @@ metadata:
   name: hybrid-csi-plugin-controller
   namespace: csi-hybrid
   labels:
-    helm.sh/chart: hybrid-csi-plugin-0.1.8
+    helm.sh/chart: hybrid-csi-plugin-0.1.9
     app.kubernetes.io/name: hybrid-csi-plugin
     app.kubernetes.io/instance: hybrid-csi-plugin
-    app.kubernetes.io/version: "v0.2.1"
+    app.kubernetes.io/version: "v0.3.0"
     app.kubernetes.io/managed-by: Helm
 rules:
   - apiGroups: [""]
@@ -92,10 +92,10 @@ metadata:
   name: hybrid-csi-plugin-controller
   namespace: csi-hybrid
   labels:
-    helm.sh/chart: hybrid-csi-plugin-0.1.8
+    helm.sh/chart: hybrid-csi-plugin-0.1.9
     app.kubernetes.io/name: hybrid-csi-plugin
     app.kubernetes.io/instance: hybrid-csi-plugin
-    app.kubernetes.io/version: "v0.2.1"
+    app.kubernetes.io/version: "v0.3.0"
     app.kubernetes.io/managed-by: Helm
 rules:
   - apiGroups: ["coordination.k8s.io"]
@@ -134,10 +134,10 @@ metadata:
   name: hybrid-csi-plugin-controller
   namespace: csi-hybrid
   labels:
-    helm.sh/chart: hybrid-csi-plugin-0.1.8
+    helm.sh/chart: hybrid-csi-plugin-0.1.9
     app.kubernetes.io/name: hybrid-csi-plugin
     app.kubernetes.io/instance: hybrid-csi-plugin
-    app.kubernetes.io/version: "v0.2.1"
+    app.kubernetes.io/version: "v0.3.0"
     app.kubernetes.io/managed-by: Helm
 spec:
   replicas: 1

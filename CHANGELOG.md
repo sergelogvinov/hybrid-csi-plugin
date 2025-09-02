@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/sergelogvinov/hybrid-csi-plugin/compare/v0.2.1...v0.3.0) (2025-09-02)
+
+
+### Features
+
+* remove alpha status ([6b7b6a1](https://github.com/sergelogvinov/hybrid-csi-plugin/commit/6b7b6a1d4c98f497a1834aed3c8306728497f9cc))
+
 ## [0.2.1](https://github.com/sergelogvinov/hybrid-csi-plugin/compare/v0.2.0...v0.2.1) (2025-06-28)
 
 
