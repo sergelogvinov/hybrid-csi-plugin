@@ -7,7 +7,7 @@ require (
 	github.com/golang/protobuf v1.5.4
 	github.com/kubernetes-csi/csi-lib-utils v0.22.0
 	github.com/prometheus/client_golang v1.23.0
-	github.com/spf13/pflag v1.0.9
+	github.com/spf13/pflag v1.0.10
 	google.golang.org/grpc v1.75.0
 	k8s.io/api v0.34.0
 	k8s.io/apimachinery v0.34.0
