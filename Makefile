@@ -57,6 +57,10 @@ build-all-archs:
 clean: ## Clean
 	rm -rf bin .cache
 
+.PHONY: tools
+tools:
+	go install github.com/google/go-licenses@latest
+
 build-%:
 	CGO_ENABLED=0 GOOS=$(OS) GOARCH=$(ARCH) go build $(GO_LDFLAGS) \
 		-o bin/hybrid-$*-$(ARCH) ./cmd/$*
@@ -75,6 +79,10 @@ lint: ## Lint Code
 .PHONY: unit
 unit: ## Unit Tests
 	go test -tags=unit $(shell go list ./...) $(TESTARGS)
+
+.PHONY: licenses
+licenses:
+	go-licenses check ./... --disallowed_types=forbidden,restricted,reciprocal,unknown
 
 .PHONY: conformance
 conformance: ## Conformance
