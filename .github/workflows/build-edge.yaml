@@ -56,12 +56,12 @@ jobs:
           USERNAME: ${{ github.repository_owner }}
           TAG: "edge"
 
-      - name: Clean old images
-        uses: actions/delete-package-versions@v5
-        with:
-          package-name: hybrid-csi-provisioner
-          package-type: container
-          min-versions-to-keep: 10
-          delete-only-untagged-versions: "true"
-          ignore-versions: '^v([0-9]+\\.)'
-        continue-on-error: true
+      # - name: Clean old images
+      #   uses: actions/delete-package-versions@v5
+      #   with:
+      #     package-name: hybrid-csi-provisioner
+      #     package-type: container
+      #     min-versions-to-keep: 10
+      #     delete-only-untagged-versions: "true"
+      #     ignore-versions: '^v([0-9]+\\.)'
+      #   continue-on-error: true
