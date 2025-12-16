@@ -13,6 +13,7 @@ git branch -D release-please--branches--main
 git checkout release-please--branches--main
 export `jq -r '"TAG=v"+.[]' .github/release-please-manifest.json`
 
+sh hack/bump-chart-version.sh hybrid-csi-plugin false false true
 make helm-unit docs
 
 git add .

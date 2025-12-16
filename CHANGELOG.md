@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/sergelogvinov/hybrid-csi-plugin/compare/v0.3.0...v0.3.1) (2025-12-16)
+
+
+### Bug Fixes
+
+* disable clean up old images ([95706ea](https://github.com/sergelogvinov/hybrid-csi-plugin/commit/95706ea69d5d8f71e6431947088cc629ba92d5e4))
+
 ## [0.3.0](https://github.com/sergelogvinov/hybrid-csi-plugin/compare/v0.2.1...v0.3.0) (2025-09-02)
 
 
