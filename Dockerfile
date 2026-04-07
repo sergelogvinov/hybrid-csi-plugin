@@ -1,7 +1,7 @@
-# syntax = docker/dockerfile:1.18
+# syntax = docker/dockerfile:1.22
 ########################################
 
-FROM golang:1.25.5-trixie AS develop
+FROM golang:1.26.1-trixie AS develop
 
 WORKDIR /src
 COPY ["go.mod", "go.sum", "/src/"]
@@ -9,7 +9,7 @@ RUN go mod download
 
 ########################################
 
-FROM --platform=${BUILDPLATFORM} golang:1.25.5-alpine3.22 AS builder
+FROM --platform=${BUILDPLATFORM} golang:1.26.1-alpine3.22 AS builder
 RUN apk update && apk add --no-cache make
 ENV GO111MODULE=on
 WORKDIR /src
@@ -29,8 +29,9 @@ LABEL org.opencontainers.image.source="https://github.com/sergelogvinov/hybrid-c
       org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.description="Hybrid CSI plugin"
 
-COPY --from=gcr.io/distroless/static-debian12:nonroot . .
+COPY --from=gcr.io/distroless/static-debian13:nonroot . .
 ARG TARGETARCH
 COPY --from=builder /src/bin/hybrid-csi-provisioner-${TARGETARCH} /bin/hybrid-csi-provisioner
 
+USER 65532:65532
 ENTRYPOINT ["/bin/hybrid-csi-provisioner"]
