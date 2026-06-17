@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2](https://github.com/sergelogvinov/hybrid-csi-plugin/compare/v0.3.1...v0.3.2) (2026-06-17)
+
+
+### Bug Fixes
+
+* **chart:** deployment resource ([0c982df](https://github.com/sergelogvinov/hybrid-csi-plugin/commit/0c982df18cf349cffed32ed8132a5fda6c3ccff2))
+
 ## [0.3.1](https://github.com/sergelogvinov/hybrid-csi-plugin/compare/v0.3.0...v0.3.1) (2025-12-16)
 
 
