@@ -16,7 +16,7 @@ metadata:
   name: hybrid-csi-plugin-controller
   namespace: csi-hybrid
   labels:
-    helm.sh/chart: hybrid-csi-plugin-0.1.10
+    helm.sh/chart: hybrid-csi-plugin-0.1.11
     app.kubernetes.io/name: hybrid-csi-plugin
     app.kubernetes.io/instance: hybrid-csi-plugin
     app.kubernetes.io/version: "v0.3.1"
@@ -29,7 +29,7 @@ metadata:
   name: hybrid-csi-plugin-controller
   namespace: csi-hybrid
   labels:
-    helm.sh/chart: hybrid-csi-plugin-0.1.10
+    helm.sh/chart: hybrid-csi-plugin-0.1.11
     app.kubernetes.io/name: hybrid-csi-plugin
     app.kubernetes.io/instance: hybrid-csi-plugin
     app.kubernetes.io/version: "v0.3.1"
@@ -92,7 +92,7 @@ metadata:
   name: hybrid-csi-plugin-controller
   namespace: csi-hybrid
   labels:
-    helm.sh/chart: hybrid-csi-plugin-0.1.10
+    helm.sh/chart: hybrid-csi-plugin-0.1.11
     app.kubernetes.io/name: hybrid-csi-plugin
     app.kubernetes.io/instance: hybrid-csi-plugin
     app.kubernetes.io/version: "v0.3.1"
@@ -134,7 +134,7 @@ metadata:
   name: hybrid-csi-plugin-controller
   namespace: csi-hybrid
   labels:
-    helm.sh/chart: hybrid-csi-plugin-0.1.10
+    helm.sh/chart: hybrid-csi-plugin-0.1.11
     app.kubernetes.io/name: hybrid-csi-plugin
     app.kubernetes.io/instance: hybrid-csi-plugin
     app.kubernetes.io/version: "v0.3.1"
@@ -184,7 +184,12 @@ spec:
             - "-v=5"
           ports:
           resources:
-            null
+            limits:
+              cpu: 100m
+              memory: 64Mi
+            requests:
+              cpu: 50m
+              memory: 32Mi
       nodeSelector:
         node-role.kubernetes.io/control-plane: ""
       tolerations:

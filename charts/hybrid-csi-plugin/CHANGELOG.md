@@ -1,0 +1,1 @@
+- fix(chart): deployment resource
