@@ -99,6 +99,10 @@ helm-unit: ## Helm Unit Tests
 helm-login: ## Helm Login
 	@echo "${HELM_TOKEN}" | helm registry login $(REGISTRY) --username $(USERNAME) --password-stdin
 
+.PHONY: helm-generate
+helm-generate: ## Helm Generate
+	@helm schema --chart-search-root charts/hybrid-csi-plugin --skip-auto-generation required,additionalProperties --append-newline
+
 .PHONY: helm-release
 helm-release: ## Helm Release
 	@rm -rf dist/

@@ -41,8 +41,7 @@ provisionerName: csi.hybrid.sinextra.dev
 logVerbosityLevel: 5
 
 # -- Storage class definition.
-storageClass:
-  []
+storageClass: []
   # - name: hybrid
   #   default: true
   #   storageClasses: proxmox,hcloud-volumes,local-path
@@ -92,6 +91,16 @@ securityContext:
     type: RuntimeDefault
   readOnlyRootFilesystem: true
 
+# -- Resource requests and limits.
+# ref: https://kubernetes.io/docs/user-guide/compute-resources/
+resources:
+  limits:
+    cpu: 100m
+    memory: 64Mi
+  requests:
+    cpu: 50m
+    memory: 32Mi
+
 # -- Controller deployment update strategy type.
 # ref: https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#updating-a-deployment
 updateStrategy:
@@ -110,14 +119,12 @@ metrics:
 
 # -- Node labels for controller assignment.
 # ref: https://kubernetes.io/docs/user-guide/node-selection/
-nodeSelector:
-  {}
+nodeSelector: {}
   # node-role.kubernetes.io/control-plane: ""
 
 # -- Tolerations for controller assignment.
 # ref: https://kubernetes.io/docs/concepts/configuration/taint-and-toleration/
-tolerations:
-  []
+tolerations: []
   # - key: node-role.kubernetes.io/control-plane
   #   effect: NoSchedule
 

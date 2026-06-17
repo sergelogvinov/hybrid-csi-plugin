@@ -1,0 +1,330 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "affinity": {
+      "description": "Affinity for controller assignment.\nref: https://kubernetes.io/docs/concepts/configuration/assign-pod-node/#affinity-and-anti-affinity",
+      "required": [],
+      "title": "affinity",
+      "type": "object"
+    },
+    "createNamespace": {
+      "default": false,
+      "description": "Create namespace.\nVery useful when using helm template.",
+      "title": "createNamespace",
+      "type": "boolean"
+    },
+    "fullnameOverride": {
+      "default": "",
+      "title": "fullnameOverride",
+      "type": "string"
+    },
+    "global": {
+      "description": "Global values are values that can be accessed from any chart or subchart by exactly the same name.",
+      "required": [],
+      "title": "global",
+      "type": "object"
+    },
+    "image": {
+      "properties": {
+        "pullPolicy": {
+          "default": "IfNotPresent",
+          "title": "pullPolicy",
+          "type": "string"
+        },
+        "repository": {
+          "default": "ghcr.io/sergelogvinov/hybrid-csi-provisioner",
+          "title": "repository",
+          "type": "string"
+        },
+        "tag": {
+          "default": "",
+          "description": "Overrides the image tag whose default is the chart appVersion.",
+          "title": "tag",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "title": "image",
+      "type": "object"
+    },
+    "imagePullSecrets": {
+      "items": {
+        "required": []
+      },
+      "title": "imagePullSecrets",
+      "type": "array"
+    },
+    "initContainers": {
+      "description": "Add additional init containers for the CSI controller pods.\nref: https://kubernetes.io/docs/concepts/workloads/pods/init-containers/",
+      "items": {
+        "required": []
+      },
+      "title": "initContainers",
+      "type": "array"
+    },
+    "logVerbosityLevel": {
+      "default": 5,
+      "description": "Log verbosity level. See https://github.com/kubernetes/community/blob/master/contributors/devel/sig-instrumentation/logging.md\nfor description of individual verbosity levels.",
+      "title": "logVerbosityLevel",
+      "type": "integer"
+    },
+    "metrics": {
+      "description": "Prometheus metrics",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Enable Prometheus metrics.",
+          "title": "enabled",
+          "type": "boolean"
+        },
+        "port": {
+          "default": 8080,
+          "description": "Prometheus metrics port.",
+          "title": "port",
+          "type": "integer"
+        },
+        "type": {
+          "default": "annotation",
+          "title": "type",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "title": "metrics",
+      "type": "object"
+    },
+    "nameOverride": {
+      "default": "",
+      "title": "nameOverride",
+      "type": "string"
+    },
+    "nodeSelector": {
+      "description": "Node labels for controller assignment.\nref: https://kubernetes.io/docs/user-guide/node-selection/",
+      "required": [],
+      "title": "nodeSelector",
+      "type": "object"
+    },
+    "podAnnotations": {
+      "description": "Annotations for controller pod.\nref: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/",
+      "required": [],
+      "title": "podAnnotations",
+      "type": "object"
+    },
+    "podLabels": {
+      "description": "Labels for controller pod.\nref: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/",
+      "required": [],
+      "title": "podLabels",
+      "type": "object"
+    },
+    "podSecurityContext": {
+      "description": "Controller Security Context.\nref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-pod",
+      "properties": {
+        "fsGroup": {
+          "default": 65532,
+          "title": "fsGroup",
+          "type": "integer"
+        },
+        "fsGroupChangePolicy": {
+          "default": "OnRootMismatch",
+          "title": "fsGroupChangePolicy",
+          "type": "string"
+        },
+        "runAsGroup": {
+          "default": 65532,
+          "title": "runAsGroup",
+          "type": "integer"
+        },
+        "runAsNonRoot": {
+          "default": true,
+          "title": "runAsNonRoot",
+          "type": "boolean"
+        },
+        "runAsUser": {
+          "default": 65532,
+          "title": "runAsUser",
+          "type": "integer"
+        }
+      },
+      "required": [],
+      "title": "podSecurityContext",
+      "type": "object"
+    },
+    "priorityClassName": {
+      "default": "system-cluster-critical",
+      "description": "Controller pods priorityClassName.",
+      "title": "priorityClassName",
+      "type": "string"
+    },
+    "provisionerName": {
+      "default": "csi.hybrid.sinextra.dev",
+      "description": "CSI Driver provisioner name.\nCurrently, cannot be customized.",
+      "title": "provisionerName",
+      "type": "string"
+    },
+    "replicaCount": {
+      "default": 1,
+      "title": "replicaCount",
+      "type": "integer"
+    },
+    "resources": {
+      "description": "Resource requests and limits.\nref: https://kubernetes.io/docs/user-guide/compute-resources/",
+      "properties": {
+        "limits": {
+          "properties": {
+            "cpu": {
+              "default": "100m",
+              "title": "cpu",
+              "type": "string"
+            },
+            "memory": {
+              "default": "64Mi",
+              "title": "memory",
+              "type": "string"
+            }
+          },
+          "required": [],
+          "title": "limits",
+          "type": "object"
+        },
+        "requests": {
+          "properties": {
+            "cpu": {
+              "default": "50m",
+              "title": "cpu",
+              "type": "string"
+            },
+            "memory": {
+              "default": "32Mi",
+              "title": "memory",
+              "type": "string"
+            }
+          },
+          "required": [],
+          "title": "requests",
+          "type": "object"
+        }
+      },
+      "required": [],
+      "title": "resources",
+      "type": "object"
+    },
+    "securityContext": {
+      "description": "Controller Container Security Context.\nref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-pod",
+      "properties": {
+        "allowPrivilegeEscalation": {
+          "default": false,
+          "title": "allowPrivilegeEscalation",
+          "type": "boolean"
+        },
+        "capabilities": {
+          "properties": {
+            "drop": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  }
+                ],
+                "required": []
+              },
+              "title": "drop",
+              "type": "array"
+            }
+          },
+          "required": [],
+          "title": "capabilities",
+          "type": "object"
+        },
+        "readOnlyRootFilesystem": {
+          "default": true,
+          "title": "readOnlyRootFilesystem",
+          "type": "boolean"
+        },
+        "seccompProfile": {
+          "properties": {
+            "type": {
+              "default": "RuntimeDefault",
+              "title": "type",
+              "type": "string"
+            }
+          },
+          "required": [],
+          "title": "seccompProfile",
+          "type": "object"
+        }
+      },
+      "required": [],
+      "title": "securityContext",
+      "type": "object"
+    },
+    "serviceAccount": {
+      "description": "Pods Service Account.\nref: https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/",
+      "properties": {
+        "annotations": {
+          "description": "Annotations to add to the service account",
+          "required": [],
+          "title": "annotations",
+          "type": "object"
+        },
+        "create": {
+          "default": true,
+          "description": "Specifies whether a service account should be created",
+          "title": "create",
+          "type": "boolean"
+        },
+        "name": {
+          "default": "",
+          "description": "The name of the service account to use.\nIf not set and create is true, a name is generated using the fullname template",
+          "title": "name",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "title": "serviceAccount",
+      "type": "object"
+    },
+    "storageClass": {
+      "description": "Storage class definition.",
+      "items": {
+        "required": []
+      },
+      "title": "storageClass",
+      "type": "array"
+    },
+    "tolerations": {
+      "description": "Tolerations for controller assignment.\nref: https://kubernetes.io/docs/concepts/configuration/taint-and-toleration/",
+      "items": {
+        "required": []
+      },
+      "title": "tolerations",
+      "type": "array"
+    },
+    "updateStrategy": {
+      "description": "Controller deployment update strategy type.\nref: https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#updating-a-deployment",
+      "properties": {
+        "rollingUpdate": {
+          "properties": {
+            "maxUnavailable": {
+              "default": 1,
+              "title": "maxUnavailable",
+              "type": "integer"
+            }
+          },
+          "required": [],
+          "title": "rollingUpdate",
+          "type": "object"
+        },
+        "type": {
+          "default": "RollingUpdate",
+          "title": "type",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "title": "updateStrategy",
+      "type": "object"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
