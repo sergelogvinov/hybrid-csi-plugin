@@ -35,3 +35,14 @@ COPY --from=builder /src/bin/hybrid-csi-provisioner-${TARGETARCH} /bin/hybrid-cs
 
 USER 65532:65532
 ENTRYPOINT ["/bin/hybrid-csi-provisioner"]
+
+########################################
+
+FROM --platform=${TARGETARCH} scratch AS gorelease
+
+COPY --from=gcr.io/distroless/static-debian13:nonroot . .
+ARG TARGETPLATFORM
+COPY ${TARGETPLATFORM}/hybrid-csi-provisioner /bin/hybrid-csi-provisioner
+
+USER 65532:65532
+ENTRYPOINT ["/bin/hybrid-csi-provisioner"]

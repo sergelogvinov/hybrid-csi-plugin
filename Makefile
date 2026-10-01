@@ -34,7 +34,7 @@ To build this project, you must have the following installed:
 
 - git
 - make
-- golang 1.20+
+- golang 1.26+
 - golangci-lint
 
 endef

@@ -1,5 +1,4 @@
 ---
-
 # See https://docs.github.com/en/github/administering-a-repository/configuration-options-for-dependency-updates
 
 version: 2
@@ -15,7 +14,18 @@ updates:
       day: "monday"
       time: "08:00"
       timezone: "UTC"
-
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns:
+          - "actions/*"
+          - "azure/*"
+          - "docker/*"
+      other:
+        patterns:
+          - "golangci/*"
+  
   - package-ecosystem: "gomod"
     directory: "/"
     commit-message:
@@ -30,13 +40,8 @@ updates:
     groups:
       k8s.io:
         patterns:
-          - "k8s.io/api"
-          - "k8s.io/apimachinery"
-          - "k8s.io/client-go"
-          - "k8s.io/cloud-provider"
-          - "k8s.io/component-base"
-          - "k8s.io/component-helpers"
-          - "k8s.io/mount-utils"
+          - "k8s.io/*"
+          - "sigs.k8s.io/*"
 
   - package-ecosystem: "docker"
     directory: "/"
@@ -49,3 +54,5 @@ updates:
       day: "monday"
       time: "07:00"
       timezone: "UTC"
+    cooldown:
+      default-days: 7

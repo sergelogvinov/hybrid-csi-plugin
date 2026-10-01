@@ -1,0 +1,82 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+version: 2
+project_name: hybrid-csi-plugin
+
+dist: bin
+builds:
+  - id: csi-provisioner
+    main: ./cmd/csi-provisioner
+    binary: hybrid-csi-provisioner
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .Commit }}
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    goamd64:
+      - v1
+    goarm64:
+      - v8.0
+
+snapshot:
+  version_template: edge
+
+changelog:
+  disable: true
+
+archives:
+  - formats: [binary]
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+
+dockers_v2:
+  - id: csi-provisioner
+    flags:
+      - --target=gorelease
+    images:
+      - "ghcr.io/sergelogvinov/{{ .ProjectName }}"
+    tags:
+      - "{{ if not .IsSnapshot }}v{{.Version}}{{ else }}edge{{ end }}"
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    annotations:
+      org.opencontainers.image.name: "{{ .ProjectName }}"
+      org.opencontainers.image.description: "Hybrid CSI Plugin"
+      org.opencontainers.image.licenses: "Apache-2.0"
+      org.opencontainers.image.source: "https://github.com/sergelogvinov/{{ .ProjectName }}"
+      org.opencontainers.image.url: "{{ .GitURL }}"
+      org.opencontainers.image.created: "{{ .Date }}"
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      io.artifacthub.package.readme-url: "https://raw.githubusercontent.com/sergelogvinov/{{ .ProjectName }}/main/README.md"
+      io.artifacthub.package.license: "Apache-2.0"
+
+docker_signs:
+  - id: csi-provisioner
+    cmd: cosign
+    args:
+      - sign
+      - "--yes"
+      - "${artifact}"
+    output: true
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+signs:
+  - artifacts: checksum
+    signature: "${artifact}.sigstore.json"
+    cmd: cosign
+    args:
+      - sign-blob
+      - "--yes"
+      - "--bundle=${signature}"
+      - "${artifact}"
+    output: true
