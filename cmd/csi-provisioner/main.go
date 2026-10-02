@@ -145,11 +145,7 @@ func main() {
 
 	factory := informers.NewSharedInformerFactory(clientset, ResyncPeriodOfCsiNodeInformer)
 
-	driverLister := factory.Storage().V1().CSIDrivers().Lister()
-	scLister := factory.Storage().V1().StorageClasses().Lister()
-	claimLister := factory.Core().V1().PersistentVolumeClaims().Lister()
-	csiNodeLister := factory.Storage().V1().CSINodes().Lister()
-	nodeLister := factory.Core().V1().Nodes().Lister()
+	listers := provisioner.NewListers(factory)
 
 	// claimInformer := factory.Core().V1().PersistentVolumeClaims().Informer()
 	// volumeInformer := factory.Core().V1().PersistentVolumes().Informer()
@@ -163,11 +159,11 @@ func main() {
 		controller.FailedProvisionThreshold(0),
 		controller.FailedDeleteThreshold(0),
 		// controller.ClaimsInformer(claimInformer),
-		controller.NodesLister(nodeLister),
+		controller.NodesLister(listers.Nodes),
 		// controller.VolumesInformer(volumeInformer),
 	}
 
-	csiProvisioner := provisioner.NewProvisioner(ctx, clientset, *method, driverLister, scLister, csiNodeLister, nodeLister, claimLister)
+	csiProvisioner := provisioner.NewProvisioner(ctx, clientset, *method, listers)
 
 	// Prepare http endpoint for metrics + leader election healthz
 	mux := http.NewServeMux()

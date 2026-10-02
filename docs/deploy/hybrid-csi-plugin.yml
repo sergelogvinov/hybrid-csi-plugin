@@ -8,6 +8,7 @@ metadata:
     pod-security.kubernetes.io/enforce: baseline
     pod-security.kubernetes.io/audit: baseline
     pod-security.kubernetes.io/warn: baseline
+
 ---
 # Source: hybrid-csi-plugin/templates/serviceaccount.yaml
 apiVersion: v1
@@ -16,11 +17,12 @@ metadata:
   name: hybrid-csi-plugin-controller
   namespace: csi-hybrid
   labels:
-    helm.sh/chart: hybrid-csi-plugin-0.1.11
+    helm.sh/chart: hybrid-csi-plugin-0.1.12
     app.kubernetes.io/name: hybrid-csi-plugin
     app.kubernetes.io/instance: hybrid-csi-plugin
     app.kubernetes.io/version: "v0.3.1"
     app.kubernetes.io/managed-by: Helm
+
 ---
 # Source: hybrid-csi-plugin/templates/controller-clusterrole.yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -29,7 +31,7 @@ metadata:
   name: hybrid-csi-plugin-controller
   namespace: csi-hybrid
   labels:
-    helm.sh/chart: hybrid-csi-plugin-0.1.11
+    helm.sh/chart: hybrid-csi-plugin-0.1.12
     app.kubernetes.io/name: hybrid-csi-plugin
     app.kubernetes.io/instance: hybrid-csi-plugin
     app.kubernetes.io/version: "v0.3.1"
@@ -63,6 +65,9 @@ rules:
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch"]
 
   - apiGroups: ["storage.k8s.io"]
     resources: ["volumeattachments"]
@@ -70,6 +75,7 @@ rules:
   - apiGroups: ["storage.k8s.io"]
     resources: ["volumeattachments/status"]
     verbs: ["patch"]
+
 ---
 # Source: hybrid-csi-plugin/templates/controller-rolebinding.yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -84,6 +90,7 @@ subjects:
   - kind: ServiceAccount
     name: hybrid-csi-plugin-controller
     namespace: csi-hybrid
+
 ---
 # Source: hybrid-csi-plugin/templates/controller-role.yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -92,7 +99,7 @@ metadata:
   name: hybrid-csi-plugin-controller
   namespace: csi-hybrid
   labels:
-    helm.sh/chart: hybrid-csi-plugin-0.1.11
+    helm.sh/chart: hybrid-csi-plugin-0.1.12
     app.kubernetes.io/name: hybrid-csi-plugin
     app.kubernetes.io/instance: hybrid-csi-plugin
     app.kubernetes.io/version: "v0.3.1"
@@ -111,6 +118,7 @@ rules:
   - apiGroups: ["apps"]
     resources: ["replicasets"]
     verbs: ["get"]
+
 ---
 # Source: hybrid-csi-plugin/templates/controller-rolebinding.yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -126,6 +134,7 @@ subjects:
   - kind: ServiceAccount
     name: hybrid-csi-plugin-controller
     namespace: csi-hybrid
+
 ---
 # Source: hybrid-csi-plugin/templates/controller-deployment.yaml
 apiVersion: apps/v1
@@ -134,7 +143,7 @@ metadata:
   name: hybrid-csi-plugin-controller
   namespace: csi-hybrid
   labels:
-    helm.sh/chart: hybrid-csi-plugin-0.1.11
+    helm.sh/chart: hybrid-csi-plugin-0.1.12
     app.kubernetes.io/name: hybrid-csi-plugin
     app.kubernetes.io/instance: hybrid-csi-plugin
     app.kubernetes.io/version: "v0.3.1"
@@ -204,6 +213,7 @@ spec:
               app.kubernetes.io/name: hybrid-csi-plugin
               app.kubernetes.io/instance: hybrid-csi-plugin
               app.kubernetes.io/component: controller
+
 ---
 # Source: hybrid-csi-plugin/templates/csidriver.yaml
 apiVersion: storage.k8s.io/v1

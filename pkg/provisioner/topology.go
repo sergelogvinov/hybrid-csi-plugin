@@ -169,6 +169,16 @@ func (t topologyTerm) subset(other topologyTerm) bool {
 	return false
 }
 
+// matchLabels returns true if every segment of the term is present in the labels.
+func (t topologyTerm) matchLabels(labels map[string]string) bool {
+	for _, k := range t {
+		if v, ok := labels[k.Key]; !ok || v != k.Value {
+			return false
+		}
+	}
+	return true
+}
+
 func toCSITopology(terms []topologyTerm) []*csi.Topology {
 	out := make([]*csi.Topology, 0, len(terms))
 	for _, term := range terms {
