@@ -4,25 +4,44 @@ The Hybrid CSI Plugin is a Container Storage Interface (CSI) plugin that allows 
 
 In Kubernetes, StatefulSets and many Kubernetes Operators usually require a single storage class to work properly. However, in a hybrid environment, you often have different storage backends assigned to different worker groups. If you want to deploy a StatefulSet across these worker groups in the same cluster, this plugin can help you.
 
-## How does the Hybrid CSI Plugin help
+## How it works
 
-The Hybrid CSI Plugin works like a middleware between Kubernetes and your storage backends. It does the following:
-* It receives storage requests from Kubernetes.
-* It prepares Persistent Volumes (PVs) for the deployment.
-* It forwards storage requests to the correct storage backend based on the node group and workload requirements.
+The plugin is a provisioner for a hybrid StorageClass, which lists ordered backend StorageClasses. It never stores data itself. Every volume is created by one of the backends and stays a volume of that backend.
 
-This allows Kubernetes to manage storage resources efficiently and flexibly within one cluster, without being restricted to a single storage class.
+When a pod with a hybrid PVC is scheduled to a node:
 
-In short, the Hybrid CSI Plugin simplifies storage management in complex Kubernetes cluster, enabling you to combine multiple storage backends seamlessly and optimize resource usage for different types of workloads.
+1. The plugin picks the first backend in the list that can serve the node. A backend fits if its topology covers the node and its CSI driver runs there.
+2. It creates a helper PVC of that backend in the same namespace, for the same node. The backend provisions a volume for the helper as usual.
+3. Once the volume exists, the plugin moves it to your PVC and deletes the helper.
+
+The volume keeps the backend's StorageClass and driver, so attach, mount, expansion, snapshots and deletion are handled by the backend's own CSI components. The plugin is only needed while a volume is being provisioned. Bound volumes keep working if it is stopped or uninstalled.
+
+### Guarantees
+
+* **No leaks on crashes.** Every step can be repeated. Finalizers on your PVC and on the helper make sure a crash, a restart, or a PVC or namespace deleted in the middle of provisioning ends with either a bound PVC or a volume reclaimed by its reclaim policy. Volumes created for a helper that are never used are always deleted.
+* **The volume is never left unbound.** It is moved to your PVC in a single write, so no other claim can take it in between.
+* **The reclaim policy comes from the hybrid StorageClass**, and is set in the same write as the move.
+* **A stuck backend does not block the pod.** If the helper is not provisioned within `--helper-timeout` (default `10m`), the PVC is rescheduled so the pod can land on another node. This happens at most `--helper-max-reschedules` times (default `3`).
+* **Backend errors show up on your PVC.** Warning events of the helper are mirrored to it as `WaitingForBackend`.
+
+### Limitations
+
+* The hybrid StorageClass must use `volumeBindingMode: WaitForFirstConsumer`: the backend is chosen for the selected node.
+* While a volume is being provisioned, both your PVC and the helper count against the namespace's ResourceQuota, see [ResourceQuota](docs/install.md#resourcequota).
+* **Expansion** works when the backend supports it: set `allowVolumeExpansion` on the hybrid StorageClass only if every backend allows it. Non-CSI backends (in-tree, local-path) cannot expand.
+* **Restore and clone** (`dataSource`/`dataSourceRef`) are passed to the backend, but the backend is not yet chosen by the snapshot's or source PVC's driver. A backend that cannot use the source fails, and the PVC is rescheduled after the helper timeout. See the [FAQ](docs/faq.md#snapshots-restore-and-clone).
+* Cloning or restoring across backends is not supported.
+
+How the plugin works inside is explained in [docs/architecture.md](docs/architecture.md).
 
 ## In Scope
 
 * [Dynamic provisioning](https://kubernetes-csi.github.io/docs/external-provisioner.html): Volumes are created dynamically when `PersistentVolumeClaim` objects are created.
-* [Topology](https://kubernetes-csi.github.io/docs/topology.html): feature to schedule Pod to Node where disk volume pool exists.
+* [Topology](https://kubernetes-csi.github.io/docs/topology.html): the backend is chosen for the node the pod is scheduled to.
 
 ## Overview
 
-The plugin does not required any cloud provider specific credentials. It creates PVs based on the storage classes defined in the Storage Class resource.
+The plugin does not require any cloud provider credentials. It only talks to the Kubernetes API, and the backends provision the volumes.
 
 Installation command:
 
@@ -31,7 +50,7 @@ kubectl create ns csi-hybrid
 helm upgrade -i -n csi-hybrid hybrid-csi-plugin oci://ghcr.io/sergelogvinov/charts/hybrid-csi-plugin
 ```
 
-For details about how to install and deploy the CSI plugin, see [Installation instruction](docs/install.md).
+For details about how to install, configure, upgrade from v0.x and uninstall the plugin, see the [installation instructions](docs/install.md). Metrics are described in [docs/metrics.md](docs/metrics.md).
 
 ### Storage Class Definition
 
@@ -51,7 +70,9 @@ volumeBindingMode: WaitForFirstConsumer
 ```
 
 Storage parameters:
-* `storageClasses`: Comma-separated list of storage classes, the order is important. The first storage class has the highest priority.
+* `storageClasses`: Comma-separated list of backend storage classes, the order is important. The first storage class that can serve the node is used.
+
+The `reclaimPolicy` of the hybrid class is applied to every volume, whatever the backend class says. Set `allowVolumeExpansion: true` only if every backend allows expansion.
 
 ## Deployment examples
 
@@ -79,7 +100,18 @@ pvc-64440564-75e9-4926-82ef-280f412b11ee   1Gi        RWO            Delete     
 pvc-811cc51e-9c9f-4476-92e1-37382b175e7f   10Gi       RWO            Delete           Bound    default/storage-test-1   hcloud-volumes   <unset>                          81s
 ```
 
-We've deployed a StatefulSet with two pods, each pod has a PVC with a different storage class. The first PVC is bound to a PV created by the `proxmox` storage class, the second PVC is bound to a PV created by the `hcloud-volumes` storage class.
+We've deployed a StatefulSet with two pods on different nodes. Both PVCs use the `hybrid` storage class. The first is bound to a PV created by the `proxmox` backend, the second to a PV created by the `hcloud-volumes` backend, because each backend serves a different node.
+
+To see how a PVC was provisioned, check its events:
+
+```shell
+$ kubectl -n default describe pvc storage-test-0
+Events:
+  Type    Reason                 From                     Message
+  ----    ------                 ----                     -------
+  Normal  BackendSelected        csi.hybrid.sinextra.dev  Backend storage class proxmox is selected for node node-1, helper pvc-64440564-... is created
+  Normal  ProvisioningSucceeded  csi.hybrid.sinextra.dev  Successfully provisioned volume pvc-64440564-...
+```
 
 ## FAQ
 

@@ -25,14 +25,17 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
 // Config holds the e2e suite configuration, read from environment variables.
 //
-// The suite never deploys the hybrid controller, the backends or the
-// StorageClasses itself: the target cluster (selected via KUBECONFIG) is
-// expected to already have all of them.
+// The suite never deploys the backends or the StorageClasses itself: the
+// target cluster (selected via KUBECONFIG) is expected to already have them.
+// The hybrid controller is run by the tests as a local process (see
+// Controller), or is expected to be deployed in the cluster with
+// E2E_CONTROLLER=external.
 type Config struct {
 	// Kubeconfig is the path to the kubeconfig of the cluster under test.
 	// Empty means "use client-go's default loading rules" (KUBECONFIG env,
@@ -61,6 +64,27 @@ type Config struct {
 	// go test runs scenario packages in parallel, and several runs may
 	// share one cluster.
 	SweepAge time.Duration
+
+	// Controller is where the controller under test runs: ControllerLocal
+	// (default) starts it as a local process for every test, with the flags
+	// the test needs; ControllerExternal uses the one deployed in the
+	// cluster, tests that need controller flags or crashes are skipped.
+	Controller string
+
+	// ControllerBinary is the controller binary of the local mode, built with
+	// -tags faultinject. Empty builds it from the source tree.
+	ControllerBinary string
+
+	// ControllerArgs are extra arguments of the local controller, e.g. "-v=5".
+	ControllerArgs []string
+
+	// UpgradeStage is the stage of the upgrade test: "before" runs against
+	// the previous version, "after" against the upgraded one. The test is
+	// skipped when it is empty, see hack/e2e-upgrade.sh.
+	UpgradeStage string
+
+	// UpgradeNamespace is the namespace shared by the stages of the upgrade test.
+	UpgradeNamespace string
 }
 
 // LoadConfig builds a Config from environment variables.
@@ -72,6 +96,13 @@ func LoadConfig() Config {
 		NamespacePrefix: getEnvDefault("E2E_NAMESPACE_PREFIX", "e2e"),
 		Timeout:         getEnvDurationDefault("E2E_TIMEOUT", 5*time.Minute),
 		SweepAge:        getEnvDurationDefault("E2E_SWEEP_AGE", 2*time.Hour),
+
+		Controller:       getEnvDefault("E2E_CONTROLLER", ControllerLocal),
+		ControllerBinary: os.Getenv("E2E_CONTROLLER_BINARY"),
+		ControllerArgs:   strings.Fields(os.Getenv("E2E_CONTROLLER_ARGS")),
+
+		UpgradeStage:     os.Getenv("E2E_UPGRADE_STAGE"),
+		UpgradeNamespace: getEnvDefault("E2E_UPGRADE_NAMESPACE", "e2e-upgrade"),
 	}
 }
 

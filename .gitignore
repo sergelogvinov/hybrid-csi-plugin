@@ -9,7 +9,8 @@
 *.dylib
 bin/
 dist/
-hack/
+.cache/
+/csi-provisioner
 
 # Test binary, built with `go test -c`
 *.test

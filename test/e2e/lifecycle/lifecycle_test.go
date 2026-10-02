@@ -19,7 +19,9 @@ limitations under the License.
 package lifecycle
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -28,9 +30,15 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
 )
 
-const annSelectedNode = "volume.kubernetes.io/selected-node"
+const (
+	annotationSelectedNode = "volume.kubernetes.io/selected-node"
+
+	// helperCleanupTimeout is shorter than the cleanup delay of the lifecycle controller (30s).
+	helperCleanupTimeout = 10 * time.Second
+)
 
 // TestStatefulSetLifecycle deploys a StatefulSet on the hybrid StorageClass,
 // waits for it to be healthy, checks that every volume was provisioned by a
@@ -59,7 +67,7 @@ func TestStatefulSetLifecycle(t *testing.T) {
 	require.NotNil(hsc.VolumeBindingMode, "storageclass %s has no volumeBindingMode set", hsc.Name)
 	require.Equal(storagev1.VolumeBindingWaitForFirstConsumer, *hsc.VolumeBindingMode,
 		"storageclass %s must use WaitForFirstConsumer", hsc.Name)
-	f.Logf("storageclass %s, backends %s", hsc.Name, hsc.Parameters["storageClasses"])
+	f.Logf("storageclass %s, backends %s", hsc.Name, hsc.Parameters[framework.ParamStorageClasses])
 
 	// 2. Create the StatefulSet.
 	f.Logf("creating statefulset %s (storageClass=%s size=%s replicas=%d)", stsName, hsc.Name, size, replicas)
@@ -107,11 +115,11 @@ func TestStatefulSetLifecycle(t *testing.T) {
 
 		backend, ok := backends[pv.Spec.StorageClassName]
 		require.True(ok, "pv %s has storageclass %q, want one of the backends %s",
-			pv.Name, pv.Spec.StorageClassName, hsc.Parameters["storageClasses"])
+			pv.Name, pv.Spec.StorageClassName, hsc.Parameters[framework.ParamStorageClasses])
 
 		used[backend.Name]++
 
-		require.Equal(backend.Provisioner, pv.Annotations[framework.AnnProvisionedBy],
+		require.Equal(backend.Provisioner, pv.Annotations[framework.AnnotationProvisionedBy],
 			"pv %s must stay owned by the backend provisioner", pv.Name)
 
 		if pv.Spec.CSI != nil {
@@ -127,7 +135,7 @@ func TestStatefulSetLifecycle(t *testing.T) {
 
 		cancel()
 		require.NoError(err)
-		require.Equal(pod.Spec.NodeName, pvc.Annotations[annSelectedNode],
+		require.Equal(pod.Spec.NodeName, pvc.Annotations[annotationSelectedNode],
 			"pvc %s was provisioned for another node", pvcName)
 
 		if pv.Spec.NodeAffinity != nil {
@@ -146,13 +154,26 @@ func TestStatefulSetLifecycle(t *testing.T) {
 
 	f.Logf("backends used: %v", used)
 
-	// 4. No helper PVC is left in the namespace.
+	// 4. No helper PVC is left in the namespace. Provision() deletes it right after binding the
+	// user PVC, well before the lifecycle controller would clean it up as a leftover.
+	var helpers []corev1.PersistentVolumeClaim
+
+	done = f.Step("waiting for the helper pvcs to be deleted")
 	ctx, cancel = f.Context()
-	helpers, err := framework.HelperPVCs(ctx, f.Client.Clientset, f.Namespace, hsc.Name)
+	err = wait.PollUntilContextTimeout(ctx, time.Second, helperCleanupTimeout, true, func(ctx context.Context) (bool, error) {
+		list, err := framework.HelperPVCs(ctx, f.Client.Clientset, f.Namespace, hsc.Name)
+		if err != nil {
+			return false, nil //nolint:nilerr // retried until the timeout
+		}
+
+		helpers = list
+
+		return len(helpers) == 0, nil
+	})
 
 	cancel()
-	require.NoError(err)
-	require.Empty(helpers, "helper pvcs left behind")
+	done()
+	require.NoError(err, "helper pvcs left behind: %v", helperNames(helpers))
 
 	// 5. Delete the StatefulSet and its PVCs: volumes with the Delete policy must go away.
 	f.Logf("deleting statefulset %s and its pvcs", stsName)
@@ -210,4 +231,13 @@ func TestStatefulSetLifecycle(t *testing.T) {
 		done()
 		require.NoError(err)
 	}
+}
+
+func helperNames(pvcs []corev1.PersistentVolumeClaim) []string {
+	names := make([]string, 0, len(pvcs))
+	for _, pvc := range pvcs {
+		names = append(names, pvc.Name)
+	}
+
+	return names
 }

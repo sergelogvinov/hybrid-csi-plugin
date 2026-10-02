@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -43,11 +44,31 @@ type Framework struct {
 	Client    *Client
 	Config    Config
 	Namespace string
+
+	// Controller is the local controller of the test, nil with E2E_CONTROLLER=external.
+	Controller *Controller
+}
+
+// Option configures a Framework.
+type Option func(*options)
+
+type options struct {
+	controllerArgs []string
+}
+
+// WithControllerArgs sets extra arguments of the local controller of the test.
+// The test must call RequireLocalController first: a deployed controller
+// ignores them.
+func WithControllerArgs(args ...string) Option {
+	return func(o *options) {
+		o.controllerArgs = append(o.controllerArgs, args...)
+	}
 }
 
 // New creates a Framework for t: a fresh namespace on the shared cluster
-// client, torn down via t.Cleanup regardless of test outcome.
-func New(t *testing.T) *Framework {
+// client, torn down via t.Cleanup regardless of test outcome, and in the
+// local mode a controller started for the test.
+func New(t *testing.T, opts ...Option) *Framework {
 	t.Helper()
 
 	f := &Framework{
@@ -55,6 +76,8 @@ func New(t *testing.T) *Framework {
 		Client: SharedClient,
 		Config: SharedConfig,
 	}
+
+	f.startController(opts)
 
 	f.Namespace = fmt.Sprintf("%s-%s", f.Config.NamespacePrefix, randSuffix())
 
@@ -93,6 +116,38 @@ func New(t *testing.T) *Framework {
 	return f
 }
 
+// NewInNamespace creates a Framework for t on a fixed namespace that outlives the test:
+// it is created if it does not exist and never deleted on cleanup. Used by tests that
+// run in stages against the same objects, e.g. before and after an upgrade.
+func NewInNamespace(t *testing.T, namespace string, opts ...Option) *Framework {
+	t.Helper()
+
+	f := &Framework{
+		T:         t,
+		Client:    SharedClient,
+		Config:    SharedConfig,
+		Namespace: namespace,
+	}
+
+	f.startController(opts)
+
+	ctx, cancel := f.Context()
+	defer cancel()
+
+	_, err := f.Client.Clientset.CoreV1().Namespaces().Create(ctx, NewNamespace(namespace), metav1.CreateOptions{})
+
+	switch {
+	case apierrors.IsAlreadyExists(err):
+		f.Logf("using namespace %s", namespace)
+	case err != nil:
+		t.Fatalf("failed to create namespace %q: %v", namespace, err)
+	default:
+		f.Logf("namespace %s created", namespace)
+	}
+
+	return f
+}
+
 // Context returns a context bound to the Framework's configured timeout.
 func (f *Framework) Context() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), f.Config.Timeout)
@@ -123,6 +178,29 @@ func (f *Framework) Step(format string, args ...any) func() {
 		f.T.Helper()
 		f.Logf("<- %s (%s)", msg, time.Since(start).Round(time.Millisecond))
 	}
+}
+
+// startController starts the local controller of the test. It is started before the
+// namespace is created, so it is stopped after the namespace cleanup, which needs it to
+// release the finalizers.
+func (f *Framework) startController(opts []Option) {
+	f.T.Helper()
+
+	if f.Config.Controller != ControllerLocal {
+		return
+	}
+
+	o := options{}
+	for _, opt := range opts {
+		opt(&o)
+	}
+
+	c, err := StartController(f.T, o.controllerArgs...)
+	if err != nil {
+		f.T.Fatalf("failed to start the controller: %v", err)
+	}
+
+	f.Controller = c
 }
 
 func randSuffix() string {

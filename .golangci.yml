@@ -114,8 +114,13 @@ linters:
         ]
     unused:
       local-variables-are-used: false
-
   exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - dupl
+          - goconst
+          - exhaustruct_v5
     paths:
       # copied from kubernetes repo
       - pkg/csi
