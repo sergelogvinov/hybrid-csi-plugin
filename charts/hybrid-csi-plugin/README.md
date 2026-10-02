@@ -65,6 +65,7 @@ Storage parameters:
 | serviceAccount | object | `{"annotations":{},"create":true,"name":""}` | Pods Service Account. ref: https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/ |
 | provisionerName | string | `"csi.hybrid.sinextra.dev"` | CSI Driver provisioner name. Currently, cannot be customized. |
 | logVerbosityLevel | int | `5` | Log verbosity level. See https://github.com/kubernetes/community/blob/master/contributors/devel/sig-instrumentation/logging.md for description of individual verbosity levels. |
+| args | list | `[]` | Arguments of the controller, e.g. `--retry-interval-max=1m`. |
 | storageClass | list | `[]` | Storage class definition. |
 | initContainers | list | `[]` | Add additional init containers for the CSI controller pods. ref: https://kubernetes.io/docs/concepts/workloads/pods/init-containers/ |
 | podAnnotations | object | `{}` | Annotations for controller pod. ref: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/ |

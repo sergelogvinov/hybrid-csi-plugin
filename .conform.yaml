@@ -37,6 +37,7 @@ policies:
         - .go
       excludeSuffixes:
         - .pb.go
+        - faultinject.go
       allowPrecedingComments: false
       header: |
         /*

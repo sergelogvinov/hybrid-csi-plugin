@@ -18,130 +18,226 @@ package provisioner
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
-	"strings"
-
-	controller "sigs.k8s.io/sig-storage-lib-external-provisioner/v10/controller"
+	"maps"
 
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/util/retry"
 	"k8s.io/component-helpers/storage/volume"
 	"k8s.io/klog/v2"
 )
 
-// Moving the backend PV (P) from the helper PVC (H) to the user PVC (U).
+// ErrForeignVolume is returned when the volume is bound to neither the helper nor the claim, it is never moved.
+var ErrForeignVolume = errors.New("persistentvolume is bound to another claim")
 
-// releasePV detaches the backend PV from the helper PVC: it switches the PV to Retain,
-// deletes the helper PVC and clears the PV claimRef.
-func (p *HybridProvisioner) releasePV(ctx context.Context, pvc *corev1.PersistentVolumeClaim) (pv *corev1.PersistentVolume, err error) {
-	var (
-		lastSaveError error
-		newFinalizers []string
-		patchStr      string
-	)
+// Fault injection points, see HybridProvisioner.SetFaultHook.
+const (
+	// FaultAfterMove is right after the move: the volume is moved to the claim, the claim is not bound yet.
+	FaultAfterMove = "after-move"
+	// FaultAfterBind is right after the bind: the claim is bound, the helper and the claim finalizer are left.
+	FaultAfterBind = "after-bind"
+)
 
-	patch := []byte(`{"spec":{"persistentVolumeReclaimPolicy":"` + corev1.PersistentVolumeReclaimRetain + `"}}`)
-	if _, err := p.client.CoreV1().PersistentVolumes().Patch(ctx, pvc.Spec.VolumeName, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
-		return nil, fmt.Errorf("failed to patch persistentvolume: %v", err)
+// MoveVolume moves the volume from the helper to the claim and binds the claim to it.
+// It returns ErrForeignVolume if the volume is bound to neither the helper nor the claim.
+func (p *HybridProvisioner) MoveVolume(
+	ctx context.Context,
+	hsc *storagev1.StorageClass,
+	claim, helper *corev1.PersistentVolumeClaim,
+	pv *corev1.PersistentVolume,
+) (*corev1.PersistentVolume, *corev1.PersistentVolumeClaim, error) {
+	provisioner := pv.Annotations[volume.AnnDynamicallyProvisioned]
+	if provisioner == "" {
+		provisioner = helper.Annotations[annotationStorageProvisioner]
 	}
 
-	for _, f := range pvc.Finalizers {
-		// Remove kubernetes.io/pvc-protection to avoid PV-controller to rebind PV to Terminating PVC usec for provisioning.
-		if f != finalizerPVCProtection {
-			newFinalizers = append(newFinalizers, f)
+	moved := pv.Spec.ClaimRef != nil && pv.Spec.ClaimRef.UID == claim.UID
+
+	pv, err := p.transferVolume(ctx, pv, helper, claim, hsc)
+	if err != nil {
+		p.metrics.phase(phaseMove, err)
+
+		return nil, nil, err
+	}
+
+	if !moved {
+		p.fault(FaultAfterMove)
+	}
+
+	bound := claim.Spec.VolumeName == pv.Name
+
+	claim, err = p.bindClaim(ctx, claim, pv, provisioner)
+	p.metrics.phase(phaseMove, err)
+
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if !bound {
+		p.fault(FaultAfterBind)
+	}
+
+	return pv, claim, nil
+}
+
+// Cleanup finishes provisioning of the claim: deletes the helper, if there is one,
+// then removes the provisioning finalizer from the claim. The volume is passed if it is known.
+func (p *HybridProvisioner) Cleanup(
+	ctx context.Context,
+	claim, helper *corev1.PersistentVolumeClaim,
+	pv *corev1.PersistentVolume,
+) error {
+	err := p.cleanup(ctx, claim, helper, pv)
+	p.metrics.phase(phaseCleanup, err)
+
+	return err
+}
+
+func (p *HybridProvisioner) cleanup(
+	ctx context.Context,
+	claim, helper *corev1.PersistentVolumeClaim,
+	pv *corev1.PersistentVolume,
+) error {
+	if helper != nil {
+		if err := p.DeleteHelper(ctx, helper, pv); err != nil {
+			return err
 		}
 	}
 
-	if len(newFinalizers) > 0 {
-		patchStr = fmt.Sprintf(`{"metadata": {"finalizers": ["%s"]}}`, strings.Join(newFinalizers, `", "`))
-	} else {
-		patchStr = `{"metadata":{"finalizers":null}}`
+	return p.releaseClaim(ctx, claim)
+}
+
+// ReclaimPolicy returns the reclaim policy of the hybrid StorageClass, Delete if it has none.
+func ReclaimPolicy(hsc *storagev1.StorageClass) corev1.PersistentVolumeReclaimPolicy {
+	if hsc.ReclaimPolicy != nil {
+		return *hsc.ReclaimPolicy
 	}
 
-	if _, err := p.client.CoreV1().PersistentVolumeClaims(pvc.Namespace).Patch(ctx, pvc.Name, types.MergePatchType, []byte(patchStr), metav1.PatchOptions{}); err != nil {
-		return nil, fmt.Errorf("failed to remove finalizer from persistentvolumeClaim: %v", err)
+	return corev1.PersistentVolumeReclaimDelete
+}
+
+// transferVolume moves the volume from the helper to the claim in one write: claimRef, reclaim policy
+// and hybrid metadata. There is no moment when the volume is Available, so the PV controller cannot bind it to another claim.
+func (p *HybridProvisioner) transferVolume(
+	ctx context.Context,
+	pv *corev1.PersistentVolume,
+	helper, claim *corev1.PersistentVolumeClaim,
+	hsc *storagev1.StorageClass,
+) (*corev1.PersistentVolume, error) {
+	switch {
+	case pv.Spec.ClaimRef != nil && pv.Spec.ClaimRef.UID == claim.UID:
+		return pv, nil
+	case pv.Spec.ClaimRef == nil || pv.Spec.ClaimRef.UID != helper.UID:
+		return nil, fmt.Errorf("%w: persistentvolume %s, claimRef %v", ErrForeignVolume, pv.Name, pv.Spec.ClaimRef)
 	}
 
-	err = wait.ExponentialBackoff(p.backoff, func() (bool, error) {
-		klog.V(4).InfoS("Trying to delete persistent volume claim", "PVC", klog.KObj(pvc))
+	pv = pv.DeepCopy()
+	pv.Spec.ClaimRef = &corev1.ObjectReference{
+		APIVersion: "v1",
+		Kind:       KindPersistentVolumeClaim,
+		Namespace:  claim.Namespace,
+		Name:       claim.Name,
+		UID:        claim.UID,
+	}
+	pv.Spec.PersistentVolumeReclaimPolicy = ReclaimPolicy(hsc)
 
-		policy := metav1.DeletePropagationForeground
-		if err := p.client.CoreV1().PersistentVolumeClaims(pvc.Namespace).Delete(ctx, pvc.Name, metav1.DeleteOptions{PropagationPolicy: &policy}); err != nil {
-			klog.V(4).ErrorS(err, "Failed to delete persistent volume claim", "PVC", klog.KObj(pvc))
-			lastSaveError = err
+	if pv.Labels == nil {
+		pv.Labels = map[string]string{}
+	}
 
-			return false, nil
-		}
+	pv.Labels[LabelManaged] = ValueTrue
 
-		return true, nil
-	})
+	if pv.Annotations == nil {
+		pv.Annotations = map[string]string{}
+	}
+
+	pv.Annotations[AnnotationClaim] = claim.Namespace + "/" + claim.Name
+	pv.Annotations[AnnotationStorageClass] = hsc.Name
+
+	pv, err := p.client.CoreV1().PersistentVolumes().Update(ctx, pv, metav1.UpdateOptions{})
 	if err != nil {
-		klog.ErrorS(lastSaveError, "Error to delete persistentvolumeclaim", "PVC", klog.KObj(pvc))
-		return nil, err
+		return nil, fmt.Errorf("failed to update persistentvolume: %v", err)
 	}
 
-	patch = []byte(`{"spec":{"claimRef":null}}`)
-
-	pv, err = p.client.CoreV1().PersistentVolumes().Patch(ctx, pvc.Spec.VolumeName, types.MergePatchType, patch, metav1.PatchOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to patch persistentvolume: %v", err)
-	}
+	klog.V(4).InfoS("Persistent volume moved to the claim", "PV", klog.KObj(pv), "claim", klog.KObj(claim))
 
 	return pv, nil
 }
 
-// bondPVC binds the user PVC to the released backend PV.
+// bindClaim points the claim at the volume.
 //
-// External provisioner can't update annotation on existence PV, so we need to patch PVC to bind it to the PV.
-func (p *HybridProvisioner) bondPVC(ctx context.Context, opts controller.ProvisionOptions, pvName string, storageClass *storagev1.StorageClass) error {
-	patch, _ := json.Marshal(&corev1.PersistentVolumeClaim{ // nolint: errcheck,errchkjson
-		ObjectMeta: metav1.ObjectMeta{
-			Annotations: map[string]string{
-				annStorageProvisioner:       storageClass.Provisioner,
-				annBetaStorageProvisioner:   storageClass.Provisioner,
-				volume.AnnBindCompleted:     "yes",
-				volume.AnnBoundByController: "yes",
-			},
-		},
-		Spec: corev1.PersistentVolumeClaimSpec{
-			VolumeName: pvName,
-		},
-	})
+// The claim and the volume have different storage classes, bind-completed makes the PV controller
+// take the syncBoundClaim path, which does not compare them.
+//
+// After the move the volume is pre-bound to the claim, and the PV controller may bind the claim
+// itself first: the update then conflicts, and the claim is read again. It is bound to the volume, but without the
+// provisioner annotations, so they are still written.
+func (p *HybridProvisioner) bindClaim(
+	ctx context.Context,
+	claim *corev1.PersistentVolumeClaim,
+	pv *corev1.PersistentVolume,
+	provisioner string,
+) (*corev1.PersistentVolumeClaim, error) {
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		if claim.Spec.VolumeName != "" && claim.Spec.VolumeName != pv.Name {
+			return fmt.Errorf("persistentvolumeclaim is bound to another persistentvolume %s", claim.Spec.VolumeName)
+		}
 
-	if _, err := p.client.CoreV1().PersistentVolumeClaims(opts.PVC.Namespace).Patch(ctx, opts.PVC.Name, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
-		return fmt.Errorf("failed to patch PersistentVolumeClaims: %v", err)
+		update := claim.DeepCopy()
+		update.Spec.VolumeName = pv.Name
+
+		if update.Annotations == nil {
+			update.Annotations = map[string]string{}
+		}
+
+		update.Annotations[volume.AnnBindCompleted] = valueYes
+		update.Annotations[volume.AnnBoundByController] = valueYes
+		update.Annotations[annotationStorageProvisioner] = provisioner
+		update.Annotations[annotationBetaStorageProvisioner] = provisioner
+
+		if claim.Spec.VolumeName == pv.Name && maps.Equal(claim.Annotations, update.Annotations) {
+			return nil
+		}
+
+		updated, err := p.client.CoreV1().PersistentVolumeClaims(claim.Namespace).Update(ctx, update, metav1.UpdateOptions{})
+		if err == nil {
+			claim = updated
+
+			return nil
+		}
+
+		if !apierrors.IsConflict(err) {
+			return err
+		}
+
+		fresh, getErr := p.client.CoreV1().PersistentVolumeClaims(claim.Namespace).Get(ctx, claim.Name, metav1.GetOptions{})
+		if getErr != nil {
+			return getErr
+		}
+
+		if fresh.UID != claim.UID {
+			return fmt.Errorf("persistentvolumeclaim is recreated, uid %s", fresh.UID)
+		}
+
+		claim = fresh
+
+		return err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to bind persistentvolumeclaim: %w", err)
 	}
 
-	if storageClass.ReclaimPolicy != nil && *storageClass.ReclaimPolicy == corev1.PersistentVolumeReclaimDelete {
-		patch := fmt.Sprintf(
-			`{
-				"spec":
-				{
-					"persistentVolumeReclaimPolicy":"%s",
-					"claimRef":
-					{
-						"apiVersion":"%s",
-						"kind":"%s",
-						"name":"%s",
-						"namespace":"%s",
-						"uid":"%s"
-					}
-				}
-			}`,
-			corev1.PersistentVolumeReclaimDelete,
-			opts.PVC.APIVersion,
-			opts.PVC.Kind,
-			opts.PVC.Name,
-			opts.PVC.Namespace,
-			opts.PVC.UID,
-		)
-		if _, err := p.client.CoreV1().PersistentVolumes().Patch(ctx, pvName, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
-			return fmt.Errorf("failed to patch PersistentVolume: %v", err)
-		}
+	return claim, nil
+}
+
+// releaseClaim removes the provisioning finalizer from the claim.
+func (p *HybridProvisioner) releaseClaim(ctx context.Context, claim *corev1.PersistentVolumeClaim) error {
+	if err := p.removeFinalizer(ctx, claim, FinalizerProvisioning); err != nil {
+		return fmt.Errorf("failed to remove finalizer from persistentvolumeclaim: %v", err)
 	}
 
 	return nil

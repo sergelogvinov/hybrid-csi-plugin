@@ -182,3 +182,53 @@ func StatefulSetPVCName(stsName string, ordinal int) string {
 func StatefulSetPodName(stsName string, ordinal int) string {
 	return stsName + "-" + strconv.Itoa(ordinal)
 }
+
+// NewTestPVC builds a ReadWriteOnce PVC of the StorageClass.
+func NewTestPVC(namespace, name, storageClass, size string) *corev1.PersistentVolumeClaim {
+	return &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			StorageClassName: &storageClass,
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceStorage: resource.MustParse(size),
+				},
+			},
+		},
+	}
+}
+
+// NewTestPod builds a pod that consumes the PVC, so that the scheduler selects
+// a node for a WaitForFirstConsumer PVC.
+func NewTestPod(namespace, name, pvcName string) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Spec: corev1.PodSpec{
+			TerminationGracePeriodSeconds: new(int64(1)),
+			Tolerations: []corev1.Toleration{
+				{Effect: corev1.TaintEffectNoSchedule, Key: "node-role.kubernetes.io/control-plane"},
+			},
+			SecurityContext: &corev1.PodSecurityContext{
+				FSGroup:    new(int64(1000)),
+				RunAsUser:  new(int64(1000)),
+				RunAsGroup: new(int64(1000)),
+			},
+			Containers: []corev1.Container{newStorageContainer(1000, storageVolumeName)},
+			Volumes: []corev1.Volume{
+				{
+					Name: storageVolumeName,
+					VolumeSource: corev1.VolumeSource{
+						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: pvcName},
+					},
+				},
+			},
+		},
+	}
+}

@@ -28,18 +28,19 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 )
 
-// pollInterval is how often waiters re-check cluster state.
-const pollInterval = 2 * time.Second
+// PollInterval is how often waiters re-check cluster state.
+const PollInterval = 2 * time.Second
 
 // WaitForPodReady polls until the named pod's Ready condition is true.
 func WaitForPodReady(ctx context.Context, clientset *kubernetes.Clientset, namespace, name string, timeout time.Duration) (*corev1.Pod, error) {
 	var pod *corev1.Pod
 
-	err := wait.PollUntilContextTimeout(ctx, pollInterval, timeout, true, func(ctx context.Context) (bool, error) {
+	err := wait.PollUntilContextTimeout(ctx, PollInterval, timeout, true, func(ctx context.Context) (bool, error) {
 		p, err := clientset.CoreV1().Pods(namespace).Get(ctx, name, metav1.GetOptions{})
 
 		switch {
@@ -73,7 +74,7 @@ func WaitForPodReady(ctx context.Context, clientset *kubernetes.Clientset, names
 func WaitForStatefulSetReplicasReady(ctx context.Context, clientset *kubernetes.Clientset, namespace, name string, replicas int32, timeout time.Duration) (*appsv1.StatefulSet, error) {
 	var sts *appsv1.StatefulSet
 
-	err := wait.PollUntilContextTimeout(ctx, pollInterval, timeout, true, func(ctx context.Context) (bool, error) {
+	err := wait.PollUntilContextTimeout(ctx, PollInterval, timeout, true, func(ctx context.Context) (bool, error) {
 		s, err := clientset.AppsV1().StatefulSets(namespace).Get(ctx, name, metav1.GetOptions{})
 
 		switch {
@@ -101,7 +102,7 @@ func WaitForStatefulSetReplicasReady(ctx context.Context, clientset *kubernetes.
 func WaitForPVCBound(ctx context.Context, clientset *kubernetes.Clientset, namespace, name string, timeout time.Duration) (*corev1.PersistentVolumeClaim, *corev1.PersistentVolume, error) {
 	var pvc *corev1.PersistentVolumeClaim
 
-	err := wait.PollUntilContextTimeout(ctx, pollInterval, timeout, true, func(ctx context.Context) (bool, error) {
+	err := wait.PollUntilContextTimeout(ctx, PollInterval, timeout, true, func(ctx context.Context) (bool, error) {
 		p, err := clientset.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, name, metav1.GetOptions{})
 
 		switch {
@@ -137,7 +138,7 @@ func WaitForPVCBound(ctx context.Context, clientset *kubernetes.Clientset, names
 func WaitForPVCExists(ctx context.Context, clientset *kubernetes.Clientset, namespace, name string, timeout time.Duration) (*corev1.PersistentVolumeClaim, error) {
 	var pvc *corev1.PersistentVolumeClaim
 
-	err := wait.PollUntilContextTimeout(ctx, pollInterval, timeout, true, func(ctx context.Context) (bool, error) {
+	err := wait.PollUntilContextTimeout(ctx, PollInterval, timeout, true, func(ctx context.Context) (bool, error) {
 		p, err := clientset.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, name, metav1.GetOptions{})
 
 		switch {
@@ -165,7 +166,7 @@ func WaitForPVCExists(ctx context.Context, clientset *kubernetes.Clientset, name
 func WaitForPVCResized(ctx context.Context, clientset *kubernetes.Clientset, namespace, name string, wantSize resource.Quantity, timeout time.Duration) (*corev1.PersistentVolumeClaim, error) {
 	var pvc *corev1.PersistentVolumeClaim
 
-	err := wait.PollUntilContextTimeout(ctx, pollInterval, timeout, true, func(ctx context.Context) (bool, error) {
+	err := wait.PollUntilContextTimeout(ctx, PollInterval, timeout, true, func(ctx context.Context) (bool, error) {
 		p, err := clientset.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, name, metav1.GetOptions{})
 
 		switch {
@@ -204,7 +205,7 @@ func WaitForPVCResized(ctx context.Context, clientset *kubernetes.Clientset, nam
 // A transient error (an API server hiccup) retries; anything else aborts
 // the wait immediately instead of silently retrying it until the timeout.
 func waitForGone(ctx context.Context, timeout time.Duration, getErr func(context.Context) error) error {
-	return wait.PollUntilContextTimeout(ctx, pollInterval, timeout, true, func(ctx context.Context) (bool, error) {
+	return wait.PollUntilContextTimeout(ctx, PollInterval, timeout, true, func(ctx context.Context) (bool, error) {
 		err := getErr(ctx)
 
 		switch {
@@ -277,4 +278,45 @@ func WaitForNamespaceGone(ctx context.Context, clientset *kubernetes.Clientset, 
 	}
 
 	return nil
+}
+
+// WaitForHelperPVC polls until the helper PVC of the user PVC exists and returns it.
+func WaitForHelperPVC(ctx context.Context, clientset *kubernetes.Clientset, pvc *corev1.PersistentVolumeClaim, timeout time.Duration) (*corev1.PersistentVolumeClaim, error) {
+	helper, err := WaitForPVCExists(ctx, clientset, pvc.Namespace, HelperPVCName(pvc), timeout)
+	if err != nil {
+		return nil, fmt.Errorf("helper of pvc %s/%s: %w", pvc.Namespace, pvc.Name, err)
+	}
+
+	return helper, nil
+}
+
+// WaitForEvent polls until an event with the reason is recorded on the object in the namespace.
+func WaitForEvent(ctx context.Context, clientset *kubernetes.Clientset, namespace, name, reason string, timeout time.Duration) (*corev1.Event, error) {
+	var event *corev1.Event
+
+	err := wait.PollUntilContextTimeout(ctx, PollInterval, timeout, true, func(ctx context.Context) (bool, error) {
+		list, err := clientset.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{
+			FieldSelector: fields.Set{"involvedObject.name": name, "reason": reason}.String(),
+		})
+
+		switch {
+		case isTransientError(err):
+			return false, nil
+		case err != nil:
+			return false, err
+		}
+
+		if len(list.Items) == 0 {
+			return false, nil
+		}
+
+		event = &list.Items[0]
+
+		return true, nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("no %s event on %s/%s: %w", reason, namespace, name, err)
+	}
+
+	return event, nil
 }

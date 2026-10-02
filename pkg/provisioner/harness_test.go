@@ -17,8 +17,10 @@ limitations under the License.
 package provisioner
 
 import (
+	"context"
 	"fmt"
 	"maps"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -27,31 +29,59 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
 	clienttesting "k8s.io/client-go/testing"
+	"k8s.io/client-go/tools/record"
+	"k8s.io/component-helpers/storage/volume"
+	testingclock "k8s.io/utils/clock/testing"
 )
 
 const (
 	testNamespace   = "default"
 	testHybridClass = "hybrid"
+
+	testHelperTimeout  = 10 * time.Minute
+	testMaxReschedules = 2
 )
 
 // testEnv is a fake cluster: fake clientset, started informers and the provisioner under test.
 type testEnv struct {
-	t      *testing.T
-	client *fake.Clientset
-	prov   *HybridProvisioner
+	t       *testing.T
+	client  *fake.Clientset
+	listers Listers
+	prov    *HybridProvisioner
+
+	recorder *record.FakeRecorder
+	clock    *testingclock.FakePassiveClock
+
+	// backend binds the pending helper PVCs between Provision() passes.
+	backend bool
+	// bindOnMove makes the emulated PV controller bind the claim as soon as the volume is moved
+	// to it, before the provisioner does it.
+	bindOnMove bool
+	// volumeHook changes the backend PV before it is created.
+	volumeHook func(pv *corev1.PersistentVolume)
+	// inBackend is set while the simulated backend writes, its writes are not counted.
+	inBackend bool
+	// writes is the number of API writes made by the provisioner.
+	writes int
+	// failAt fails the n-th write of the provisioner, 0 disables it.
+	failAt int
+	// version is the last resourceVersion set by the emulated API server.
+	version int
 }
 
 // newTestEnv creates the fake cluster with the objects and the provisioner.
-func newTestEnv(t *testing.T, method string, objs ...runtime.Object) *testEnv {
+func newTestEnv(t *testing.T, objs ...runtime.Object) *testEnv {
 	t.Helper()
 
 	ctx := t.Context()
@@ -68,88 +98,346 @@ func newTestEnv(t *testing.T, method string, objs ...runtime.Object) *testEnv {
 		}
 	}
 
-	prov := NewProvisioner(ctx, client, method, listers)
-	prov.bindTimeout = 5 * time.Second
-	prov.backoff = wait.Backoff{Duration: 10 * time.Millisecond, Factor: 1, Steps: 3}
+	recorder := record.NewFakeRecorder(100)
+	prov := NewProvisioner(ctx, client, listers, Options{
+		HelperTimeout:        testHelperTimeout,
+		HelperMaxReschedules: testMaxReschedules,
+		Recorder:             recorder,
+	})
 
-	return &testEnv{t: t, client: client, prov: prov}
+	clock := testingclock.NewFakePassiveClock(time.Now())
+	prov.clock = clock
+
+	e := &testEnv{t: t, client: client, listers: listers, prov: prov, recorder: recorder, clock: clock}
+
+	// Reactors run in reverse order: countWrites (fault injection), then apiServer.
+	client.PrependReactor("*", "*", e.apiServer)
+	client.PrependReactor("*", "*", e.countWrites)
+
+	return e
 }
 
-// simulateBackend emulates the backend provisioner and the PV controller:
-// once the provisioner watches a helper PVC, a PV is created and bound to it.
-func (e *testEnv) simulateBackend() {
-	e.client.PrependWatchReactor("persistentvolumeclaims", func(action clienttesting.Action) (bool, watch.Interface, error) {
-		wa, ok := action.(clienttesting.WatchActionImpl)
+// countWrites counts the writes of the provisioner and fails the one at failAt.
+func (e *testEnv) countWrites(action clienttesting.Action) (bool, runtime.Object, error) {
+	switch action.GetVerb() {
+	case "create", "update", "patch", "delete":
+	default:
+		return false, nil, nil
+	}
+
+	if e.inBackend {
+		return false, nil, nil
+	}
+
+	e.writes++
+
+	if e.writes == e.failAt {
+		return true, nil, fmt.Errorf("injected fault: %s %s", action.GetVerb(), action.GetResource().Resource)
+	}
+
+	return false, nil, nil
+}
+
+// apiServer emulates what the fake clientset does not: the metadata the API server sets
+// on create (UID, creation time), and optimistic concurrency: every create and update stores
+// a copy with a new resourceVersion, an update with another resourceVersion is a conflict.
+// The caller's object is never changed, as with a real client.
+//
+// It also emulates the writes of the PV controller right after the move: the helper becomes
+// Lost when the volume is moved to the claim, the claim becomes Bound when it points at the volume,
+// so the objects read before are stale.
+func (e *testEnv) apiServer(action clienttesting.Action) (bool, runtime.Object, error) {
+	tracker := e.client.Tracker()
+	gvr := action.GetResource()
+
+	// CreateAction and UpdateAction have the same methods, a type switch cannot tell them apart.
+	a, ok := action.(clienttesting.CreateAction)
+	if !ok {
+		return false, nil, nil
+	}
+
+	switch action.GetVerb() {
+	case "create":
+		obj := a.GetObject().DeepCopyObject()
+
+		meta, ok := obj.(metav1.Object)
 		if !ok {
 			return false, nil, nil
 		}
 
-		name, ok := wa.GetWatchRestrictions().Fields.RequiresExactMatch("metadata.name")
+		version := e.nextVersion()
+
+		// Unique, as a recreated object gets a new UID.
+		if meta.GetUID() == "" {
+			meta.SetUID(types.UID("uid-" + meta.GetName() + "-" + version))
+		}
+
+		if ts := meta.GetCreationTimestamp(); ts.IsZero() {
+			meta.SetCreationTimestamp(metav1.NewTime(e.clock.Now()))
+		}
+
+		meta.SetResourceVersion(version)
+
+		if err := tracker.Create(gvr, obj, a.GetNamespace()); err != nil {
+			return true, nil, err
+		}
+
+		return true, obj.DeepCopyObject(), nil
+
+	case "update":
+		obj := a.GetObject().DeepCopyObject()
+
+		meta, ok := obj.(metav1.Object)
 		if !ok {
 			return false, nil, nil
 		}
 
-		gvr := action.GetResource()
-		ns := action.GetNamespace()
-
-		w, err := e.client.Tracker().Watch(gvr, ns, wa.GetListOptions())
+		stored, err := tracker.Get(gvr, a.GetNamespace(), meta.GetName())
 		if err != nil {
 			return true, nil, err
 		}
 
-		go e.bindHelper(ns, name)
+		if storedMeta, ok := stored.(metav1.Object); ok && meta.GetResourceVersion() != "" && meta.GetResourceVersion() != storedMeta.GetResourceVersion() {
+			return true, nil, apierrors.NewConflict(gvr.GroupResource(), meta.GetName(),
+				fmt.Errorf("resourceVersion %s is stale, stored %s", meta.GetResourceVersion(), storedMeta.GetResourceVersion()))
+		}
 
-		return true, w, nil
+		meta.SetResourceVersion(e.nextVersion())
+
+		if err = tracker.Update(gvr, obj, a.GetNamespace()); err != nil {
+			return true, nil, err
+		}
+
+		if a.GetSubresource() == "" {
+			e.pvController(obj)
+		}
+
+		return true, obj.DeepCopyObject(), nil
+	}
+
+	return false, nil, nil
+}
+
+func (e *testEnv) nextVersion() string {
+	e.version++
+
+	return strconv.Itoa(e.version)
+}
+
+// pvController emulates the PV controller after an update of the object, see apiServer.
+func (e *testEnv) pvController(obj runtime.Object) {
+	tracker := e.client.Tracker()
+	pvcs := corev1.SchemeGroupVersion.WithResource("persistentvolumeclaims")
+
+	var claim *corev1.PersistentVolumeClaim
+
+	switch obj := obj.(type) {
+	case *corev1.PersistentVolume:
+		if obj.Spec.ClaimRef == nil {
+			return
+		}
+
+		stored, err := tracker.Get(pvcs, obj.Spec.ClaimRef.Namespace, "pvc-"+string(obj.Spec.ClaimRef.UID))
+		helper, ok := stored.(*corev1.PersistentVolumeClaim)
+
+		if err != nil || !ok || helper.Spec.VolumeName != obj.Name || helper.Status.Phase == corev1.ClaimLost {
+			return
+		}
+
+		claim = helper.DeepCopy()
+		claim.Status.Phase = corev1.ClaimLost
+
+		if e.bindOnMove {
+			e.bindMovedClaim(obj)
+		}
+	case *corev1.PersistentVolumeClaim:
+		if obj.Spec.VolumeName == "" || obj.Labels[LabelRole] == LabelRoleHelper || obj.Status.Phase == corev1.ClaimBound {
+			return
+		}
+
+		claim = obj.DeepCopy()
+		claim.Status.Phase = corev1.ClaimBound
+	default:
+		return
+	}
+
+	claim.ResourceVersion = e.nextVersion()
+
+	if err := tracker.Update(pvcs, claim, claim.Namespace); err != nil {
+		e.t.Errorf("pv controller: failed to update %s: %v", claim.Name, err)
+	}
+}
+
+// bindMovedClaim emulates the PV controller binding the claim to the volume pre-bound to it.
+func (e *testEnv) bindMovedClaim(pv *corev1.PersistentVolume) {
+	tracker := e.client.Tracker()
+	pvcs := corev1.SchemeGroupVersion.WithResource("persistentvolumeclaims")
+
+	stored, err := tracker.Get(pvcs, pv.Spec.ClaimRef.Namespace, pv.Spec.ClaimRef.Name)
+	claim, ok := stored.(*corev1.PersistentVolumeClaim)
+
+	if err != nil || !ok || claim.UID != pv.Spec.ClaimRef.UID || claim.Spec.VolumeName != "" {
+		return
+	}
+
+	claim = claim.DeepCopy()
+	claim.Spec.VolumeName = pv.Name
+	claim.Status.Phase = corev1.ClaimBound
+
+	if claim.Annotations == nil {
+		claim.Annotations = map[string]string{}
+	}
+
+	claim.Annotations[volume.AnnBindCompleted] = valueYes
+	claim.Annotations[volume.AnnBoundByController] = valueYes
+	claim.ResourceVersion = e.nextVersion()
+
+	if err := tracker.Update(pvcs, claim, claim.Namespace); err != nil {
+		e.t.Errorf("pv controller: failed to bind %s: %v", claim.Name, err)
+	}
+}
+
+// events returns the events recorded on the claims so far.
+func (e *testEnv) events() []string {
+	var events []string
+
+	for {
+		select {
+		case ev := <-e.recorder.Events:
+			events = append(events, ev)
+		default:
+			return events
+		}
+	}
+}
+
+// bindHelpers emulates the backend provisioner and the PV controller:
+// a PV is created for every pending helper PVC and bound to it.
+func (e *testEnv) bindHelpers() {
+	e.t.Helper()
+
+	e.inBackend = true
+	defer func() { e.inBackend = false }()
+
+	helpers, err := e.client.CoreV1().PersistentVolumeClaims("").List(e.t.Context(), metav1.ListOptions{
+		LabelSelector: LabelRole + "=" + LabelRoleHelper,
 	})
+	if err != nil {
+		e.t.Fatalf("backend: failed to list helper PVCs: %v", err)
+	}
+
+	for i := range helpers.Items {
+		if helper := &helpers.Items[i]; helper.Spec.VolumeName == "" && helper.DeletionTimestamp == nil {
+			e.bindHelper(helper)
+		}
+	}
 }
 
 // bindHelper creates a backend PV for the helper PVC and binds them.
-func (e *testEnv) bindHelper(namespace, name string) {
-	pvcs := e.client.CoreV1().PersistentVolumeClaims(namespace)
+func (e *testEnv) bindHelper(helper *corev1.PersistentVolumeClaim) {
+	e.t.Helper()
 
-	helper, err := pvcs.Get(e.t.Context(), name, metav1.GetOptions{})
-	if err != nil {
-		e.t.Errorf("backend: failed to get helper PVC %s/%s: %v", namespace, name, err)
-
-		return
-	}
+	pvcs := e.client.CoreV1().PersistentVolumeClaims(helper.Namespace)
 
 	sc, err := e.client.StorageV1().StorageClasses().Get(e.t.Context(), *helper.Spec.StorageClassName, metav1.GetOptions{})
 	if err != nil {
-		e.t.Errorf("backend: failed to get storage class %s: %v", *helper.Spec.StorageClassName, err)
-
-		return
+		e.t.Fatalf("backend: failed to get storage class %s: %v", *helper.Spec.StorageClassName, err)
 	}
 
 	pv := testBackendPV(helper, sc)
-
-	if _, err = e.client.CoreV1().PersistentVolumes().Create(e.t.Context(), pv, metav1.CreateOptions{}); err != nil {
-		e.t.Errorf("backend: failed to create PV %s: %v", pv.Name, err)
-
-		return
+	if e.volumeHook != nil {
+		e.volumeHook(pv)
 	}
 
+	if _, err = e.client.CoreV1().PersistentVolumes().Create(e.t.Context(), pv, metav1.CreateOptions{}); err != nil {
+		e.t.Fatalf("backend: failed to create PV %s: %v", pv.Name, err)
+	}
+
+	helper = helper.DeepCopy()
 	helper.Spec.VolumeName = pv.Name
 	helper.Status.Phase = corev1.ClaimBound
 	helper.Finalizers = append(helper.Finalizers, finalizerPVCProtection)
 
 	if helper, err = pvcs.Update(e.t.Context(), helper, metav1.UpdateOptions{}); err != nil {
-		e.t.Errorf("backend: failed to update helper PVC: %v", err)
-
-		return
+		e.t.Fatalf("backend: failed to update helper PVC: %v", err)
 	}
 
 	if helper.Status.Phase != corev1.ClaimBound {
 		helper.Status.Phase = corev1.ClaimBound
 
 		if _, err = pvcs.UpdateStatus(e.t.Context(), helper, metav1.UpdateOptions{}); err != nil {
-			e.t.Errorf("backend: failed to update helper PVC status: %v", err)
+			e.t.Fatalf("backend: failed to update helper PVC status: %v", err)
 		}
 	}
 }
 
-// provisionUntilDone calls Provision() until it stops returning ProvisioningInBackground.
-func (e *testEnv) provisionUntilDone(opts controller.ProvisionOptions, maxPasses int) (*corev1.PersistentVolume, controller.ProvisioningState, error) {
+// sync waits until the informer caches have caught up with the fake cluster.
+func (e *testEnv) sync() {
+	e.t.Helper()
+
+	err := wait.PollUntilContextTimeout(e.t.Context(), 5*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+		claims, err := e.client.CoreV1().PersistentVolumeClaims("").List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return false, err
+		}
+
+		cachedClaims, err := e.listers.Claims.List(labels.Everything())
+		if err != nil {
+			return false, err
+		}
+
+		volumes, err := e.client.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return false, err
+		}
+
+		cachedVolumes, err := e.listers.Volumes.List(labels.Everything())
+		if err != nil {
+			return false, err
+		}
+
+		return sameObjects(claims.Items, cachedClaims) && sameObjects(volumes.Items, cachedVolumes), nil
+	})
+	if err != nil {
+		e.t.Fatalf("informers did not sync: %v", err)
+	}
+}
+
+func sameObjects[T any, PT interface {
+	*T
+	metav1.Object
+}](items []T, cached []PT) bool {
+	if len(items) != len(cached) {
+		return false
+	}
+
+	byName := make(map[string]PT, len(cached))
+	for _, obj := range cached {
+		byName[obj.GetNamespace()+"/"+obj.GetName()] = obj
+	}
+
+	for i := range items {
+		obj := PT(&items[i])
+		if c, ok := byName[obj.GetNamespace()+"/"+obj.GetName()]; !ok || !apiequality.Semantic.DeepEqual(obj, c) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// provision runs one Provision() pass for the user PVC, as the library does.
+func (e *testEnv) provision(pvcName, nodeName string) (*corev1.PersistentVolume, controller.ProvisioningState, error) {
+	e.t.Helper()
+
+	e.sync()
+
+	return e.prov.Provision(e.t.Context(), e.provisionOptions(pvcName, nodeName))
+}
+
+// provisionUntilDone calls Provision() until it stops returning ProvisioningInBackground
+// or the user PVC is bound (the library does not call Provision() for it any more).
+func (e *testEnv) provisionUntilDone(pvcName, nodeName string, maxPasses int) (*corev1.PersistentVolume, controller.ProvisioningState, error) {
 	e.t.Helper()
 
 	var (
@@ -159,9 +447,22 @@ func (e *testEnv) provisionUntilDone(opts controller.ProvisionOptions, maxPasses
 	)
 
 	for range maxPasses {
-		pv, state, err = e.prov.Provision(e.t.Context(), opts)
+		pv, state, err = e.provision(pvcName, nodeName)
 		if state != controller.ProvisioningInBackground {
 			return pv, state, err
+		}
+
+		claim, getErr := e.getPVC(pvcName)
+		if getErr != nil {
+			e.t.Fatalf("failed to get PVC %s: %v", pvcName, getErr)
+		}
+
+		if claim.Spec.VolumeName != "" {
+			return pv, state, err
+		}
+
+		if e.backend {
+			e.bindHelpers()
 		}
 	}
 
@@ -174,7 +475,7 @@ func (e *testEnv) provisionUntilDone(opts controller.ProvisionOptions, maxPasses
 func (e *testEnv) provisionOptions(pvcName, nodeName string) controller.ProvisionOptions {
 	e.t.Helper()
 
-	pvc, err := e.client.CoreV1().PersistentVolumeClaims(testNamespace).Get(e.t.Context(), pvcName, metav1.GetOptions{})
+	pvc, err := e.getPVC(pvcName)
 	if err != nil {
 		e.t.Fatalf("failed to get PVC %s: %v", pvcName, err)
 	}
@@ -203,6 +504,17 @@ func (e *testEnv) getPVC(name string) (*corev1.PersistentVolumeClaim, error) {
 
 func (e *testEnv) getPV(name string) (*corev1.PersistentVolume, error) {
 	return e.client.CoreV1().PersistentVolumes().Get(e.t.Context(), name, metav1.GetOptions{})
+}
+
+func (e *testEnv) listPVs() []corev1.PersistentVolume {
+	e.t.Helper()
+
+	pvs, err := e.client.CoreV1().PersistentVolumes().List(e.t.Context(), metav1.ListOptions{})
+	if err != nil {
+		e.t.Fatalf("failed to list PVs: %v", err)
+	}
+
+	return pvs.Items
 }
 
 // Fixtures.
@@ -249,8 +561,8 @@ func testStorageClass(name, provisioner string, allowedTopologies ...corev1.Topo
 	}
 }
 
-func testHybridStorageClass(name string, backends ...string) *storagev1.StorageClass {
-	sc := testStorageClass(name, DriverName)
+func testHybridStorageClass(backends ...string) *storagev1.StorageClass {
+	sc := testStorageClass(testHybridClass, DriverName)
 	sc.Parameters = map[string]string{paramStorageClasses: strings.Join(backends, ",")}
 
 	return sc
@@ -286,7 +598,7 @@ func testPVC(name string) *corev1.PersistentVolumeClaim {
 func testBackendPV(helper *corev1.PersistentVolumeClaim, sc *storagev1.StorageClass) *corev1.PersistentVolume {
 	pv := &corev1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        fmt.Sprintf("backend-%s", helper.Name),
+			Name:        "pvc-" + string(helper.UID),
 			Annotations: map[string]string{"pv.kubernetes.io/provisioned-by": sc.Provisioner},
 		},
 		Spec: corev1.PersistentVolumeSpec{
@@ -295,7 +607,7 @@ func testBackendPV(helper *corev1.PersistentVolumeClaim, sc *storagev1.StorageCl
 			StorageClassName:              sc.Name,
 			PersistentVolumeReclaimPolicy: *sc.ReclaimPolicy,
 			ClaimRef: &corev1.ObjectReference{
-				Kind:       "PersistentVolumeClaim",
+				Kind:       KindPersistentVolumeClaim,
 				APIVersion: "v1",
 				Namespace:  helper.Namespace,
 				Name:       helper.Name,
@@ -308,7 +620,7 @@ func testBackendPV(helper *corev1.PersistentVolumeClaim, sc *storagev1.StorageCl
 		Status: corev1.PersistentVolumeStatus{Phase: corev1.VolumeBound},
 	}
 
-	if node := helper.Annotations[annSelectedNode]; node != "" {
+	if node := helper.Annotations[annotationSelectedNode]; node != "" {
 		pv.Spec.NodeAffinity = &corev1.VolumeNodeAffinity{
 			Required: &corev1.NodeSelector{
 				NodeSelectorTerms: []corev1.NodeSelectorTerm{{
@@ -321,4 +633,66 @@ func testBackendPV(helper *corev1.PersistentVolumeClaim, sc *storagev1.StorageCl
 	}
 
 	return pv
+}
+
+// selectNode sets node-a as the selected node of the user PVC "data", as the scheduler does.
+func (e *testEnv) selectNode() {
+	e.t.Helper()
+
+	const (
+		pvcName  = "data"
+		nodeName = "node-a"
+	)
+
+	e.inBackend = true
+	defer func() { e.inBackend = false }()
+
+	pvc, err := e.getPVC(pvcName)
+	if err != nil {
+		e.t.Fatalf("failed to get PVC %s: %v", pvcName, err)
+	}
+
+	if pvc.Annotations == nil {
+		pvc.Annotations = map[string]string{}
+	}
+
+	pvc.Annotations[annotationSelectedNode] = nodeName
+
+	if _, err = e.client.CoreV1().PersistentVolumeClaims(testNamespace).Update(e.t.Context(), pvc, metav1.UpdateOptions{}); err != nil {
+		e.t.Fatalf("failed to update PVC %s: %v", pvcName, err)
+	}
+}
+
+func (e *testEnv) listEvents() []corev1.Event {
+	e.t.Helper()
+
+	events, err := e.client.CoreV1().Events("").List(e.t.Context(), metav1.ListOptions{})
+	if err != nil {
+		e.t.Fatalf("failed to list events: %v", err)
+	}
+
+	return events.Items
+}
+
+// helperEvent records a Warning event on the helper PVC, as the backend provisioner does.
+func (e *testEnv) helperEvent(helper *corev1.PersistentVolumeClaim, eventType, reason, message string) {
+	e.t.Helper()
+
+	e.inBackend = true
+	defer func() { e.inBackend = false }()
+
+	ev := &corev1.Event{
+		ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s.%d", helper.Name, len(e.listEvents())), Namespace: helper.Namespace},
+		InvolvedObject: corev1.ObjectReference{
+			Kind: KindPersistentVolumeClaim, Namespace: helper.Namespace, Name: helper.Name, UID: helper.UID,
+		},
+		Type:          eventType,
+		Reason:        reason,
+		Message:       message,
+		LastTimestamp: metav1.NewTime(e.clock.Now()),
+	}
+
+	if _, err := e.client.CoreV1().Events(helper.Namespace).Create(e.t.Context(), ev, metav1.CreateOptions{}); err != nil {
+		e.t.Fatalf("failed to create event: %v", err)
+	}
 }

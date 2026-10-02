@@ -53,6 +53,11 @@ spec:
             {{- if .Values.metrics.enabled }}
             - "--http-endpoint=:{{ .Values.metrics.port }}"
             {{- end }}
+            - "--leader-election"
+            - "--leader-election-namespace={{ .Release.Namespace }}"
+            {{- range .Values.args }}
+            - {{ . | quote }}
+            {{- end }}
           ports:
             {{- if .Values.metrics.enabled }}
             - name: metrics

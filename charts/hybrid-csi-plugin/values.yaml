@@ -40,6 +40,9 @@ provisionerName: csi.hybrid.sinextra.dev
 # for description of individual verbosity levels.
 logVerbosityLevel: 5
 
+# -- Arguments of the controller, e.g. `--retry-interval-max=1m`.
+args: []
+
 # -- Storage class definition.
 storageClass: []
   # - name: hybrid

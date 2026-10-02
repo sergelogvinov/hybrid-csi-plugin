@@ -16,10 +16,6 @@ limitations under the License.
 
 package provisioner
 
-// Metadata contract, see docs/design.md §4.
-//
-// U - user PVC, H - helper PVC, P - backend PV.
-
 const (
 	// DriverName is the name of the CSI driver
 	DriverName = "csi.hybrid.sinextra.dev"
@@ -28,66 +24,59 @@ const (
 
 	// metaPrefix is the domain prefix of all hybrid finalizers, labels and annotations.
 	metaPrefix = DriverName + "/"
-)
 
-// Finalizers (§4.1).
-const (
-	// FinalizerProvisioning is set on U before H is created.
+	// FinalizerProvisioning is set on the user PVC before the helper PVC is created.
 	FinalizerProvisioning = metaPrefix + "provisioning"
-	// FinalizerHelper is set on H when it is created.
+	// FinalizerHelper is set on the helper PVC when it is created.
 	FinalizerHelper = metaPrefix + "helper"
-)
 
-// Annotations and labels on U (§4.2).
-const (
-	// AnnBackendClass is the pinned backend StorageClass.
-	AnnBackendClass = metaPrefix + "backend-class"
-	// AnnHelper is the name of H.
-	AnnHelper = metaPrefix + "helper"
-	// AnnReschedules is how many times the helper timeout has caused a reschedule.
-	AnnReschedules = metaPrefix + "reschedules"
-	// AnnExpandable is set to "false" when the backend cannot expand volumes.
-	AnnExpandable = metaPrefix + "expandable"
-)
+	// AnnotationBackendClass is the pinned backend StorageClass.
+	AnnotationBackendClass = metaPrefix + "backend-class"
+	// AnnotationHelper is the name of the helper PVC.
+	AnnotationHelper = metaPrefix + "helper"
+	// AnnotationReschedules is how many times the claim was rescheduled because of the helper timeout
+	// or a volume that does not fit the selected node.
+	AnnotationReschedules = metaPrefix + "reschedules"
+	// AnnotationExpandable is set to "false" when the backend cannot expand volumes.
+	AnnotationExpandable = metaPrefix + "expandable"
+	// AnnotationOwnerUID is the UID of the user PVC that owns the helper PVC.
+	AnnotationOwnerUID = metaPrefix + "owner-uid"
 
-// Annotations and labels on H (§4.2).
-const (
+	// AnnotationClaim is the namespace/name of the user PVC.
+	AnnotationClaim = metaPrefix + "claim"
+	// AnnotationStorageClass is the hybrid StorageClass name.
+	AnnotationStorageClass = metaPrefix + "storage-class"
+	// AnnotationMigrated marks a PV provisioned by v0.x and adopted by the migration, value "true".
+	AnnotationMigrated = metaPrefix + "migrated"
+	// AnnotationReclaimPolicyChecked marks a migrated PV whose reclaim policy matched the hybrid
+	// StorageClass or was fixed, value "true". It is not checked again: from then on the policy
+	// may be changed on purpose.
+	AnnotationReclaimPolicyChecked = metaPrefix + "reclaim-policy-checked"
+
 	// LabelRole marks helper PVCs, value LabelRoleHelper.
 	LabelRole = metaPrefix + "role"
-	// LabelRoleHelper is the value of LabelRole on H.
+	// LabelRoleHelper is the value of LabelRole on helper PVCs.
 	LabelRoleHelper = "helper"
-	// AnnOwnerUID is the UID of U that owns H.
-	AnnOwnerUID = metaPrefix + "owner-uid"
-)
-
-// Annotations and labels on P (§4.2).
-const (
 	// LabelManaged marks hybrid-managed PVs, value "true".
 	LabelManaged = metaPrefix + "managed"
-	// AnnClaim is the namespace/name of U.
-	AnnClaim = metaPrefix + "claim"
-	// AnnStorageClass is the hybrid StorageClass name.
-	AnnStorageClass = metaPrefix + "storage-class"
+)
+
+// Values of hybrid and Kubernetes annotations.
+const (
+	// ValueTrue is the value of the boolean labels and annotations.
+	ValueTrue = "true"
+	// valueYes is the value of the PV controller binding annotations (bind-completed, bound-by-controller).
+	valueYes = "yes"
 )
 
 // Well-known Kubernetes annotations.
 const (
-	annBetaStorageProvisioner = "volume.beta.kubernetes.io/storage-provisioner"
-	annStorageProvisioner     = "volume.kubernetes.io/storage-provisioner"
-	annSelectedNode           = "volume.kubernetes.io/selected-node"
+	annotationBetaStorageProvisioner = "volume.beta.kubernetes.io/storage-provisioner"
+	annotationStorageProvisioner     = "volume.kubernetes.io/storage-provisioner"
+	annotationSelectedNode           = "volume.kubernetes.io/selected-node"
 
 	finalizerPVCProtection = "kubernetes.io/pvc-protection"
-)
 
-// StorageClass parameters.
-const (
-	// paramStorageClasses is the comma-separated list of backend StorageClasses.
-	paramStorageClasses = "storageClasses"
-)
-
-// Provisioning methods.
-const (
-	methodDefault    = "auto"
-	methodPod        = "pod"
-	methodAnnotation = "annotation"
+	// KindPersistentVolumeClaim is the kind of PVC references.
+	KindPersistentVolumeClaim = "PersistentVolumeClaim"
 )

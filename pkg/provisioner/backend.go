@@ -18,6 +18,7 @@ package provisioner
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -25,14 +26,35 @@ import (
 	"k8s.io/klog/v2"
 )
 
-// backendClasses returns the ordered list of backend StorageClass names of a hybrid StorageClass.
-func backendClasses(hsc *storagev1.StorageClass) ([]string, error) {
+// StorageClass parameters.
+const (
+	// paramStorageClasses is the comma-separated list of backend StorageClasses.
+	paramStorageClasses = "storageClasses"
+)
+
+// BackendClasses returns the ordered list of backend StorageClass names of a hybrid StorageClass.
+func BackendClasses(hsc *storagev1.StorageClass) ([]string, error) {
 	classes, ok := hsc.Parameters[paramStorageClasses]
 	if !ok {
 		return nil, fmt.Errorf("%s parameter is required", paramStorageClasses)
 	}
 
 	return strings.Split(classes, ","), nil
+}
+
+// chooseBackend returns the backend StorageClass for the claim on the node.
+// The class pinned on the claim is reused while it still fits the node.
+func (p *HybridProvisioner) chooseBackend(claim *corev1.PersistentVolumeClaim, node *corev1.Node, storageClasses []string) (*storagev1.StorageClass, error) {
+	if pinned := claim.Annotations[AnnotationBackendClass]; pinned != "" && slices.Contains(storageClasses, pinned) {
+		class, err := p.selectBackend(node, []string{pinned})
+		if err == nil {
+			return class, nil
+		}
+
+		klog.V(4).InfoS("pinned storage class does not fit the node", "claim", klog.KObj(claim), "node", klog.KObj(node), "storageClass", pinned)
+	}
+
+	return p.selectBackend(node, storageClasses)
 }
 
 // selectBackend returns the first backend StorageClass from the list that can serve the node.
@@ -64,8 +86,6 @@ func (p *HybridProvisioner) selectBackend(node *corev1.Node, storageClasses []st
 
 // fits checks whether the backend StorageClass can provision a volume on the node.
 // It returns nil if it can, or an error with the reason.
-//
-// This is the single predicate for backend selection (docs/design.md §5.3 step 2 a–c).
 func (p *HybridProvisioner) fits(class *storagev1.StorageClass, node *corev1.Node, csiNode *storagev1.CSINode) error {
 	if len(class.AllowedTopologies) > 0 {
 		if err := allowedTopologiesFit(class, node, csiNode); err != nil {

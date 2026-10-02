@@ -33,17 +33,17 @@ const (
 )
 
 func TestBackendClasses(t *testing.T) {
-	got, err := backendClasses(testHybridStorageClass(testHybridClass, "a", "b", "c"))
+	got, err := BackendClasses(testHybridStorageClass("a", "b", "c"))
 	if err != nil {
-		t.Fatalf("backendClasses() error = %v", err)
+		t.Fatalf("BackendClasses() error = %v", err)
 	}
 
 	if want := []string{"a", "b", "c"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("backendClasses() = %v, want %v", got, want)
+		t.Errorf("BackendClasses() = %v, want %v", got, want)
 	}
 
-	if _, err = backendClasses(testStorageClass(testHybridClass, DriverName)); err == nil {
-		t.Errorf("backendClasses() without parameter expected error")
+	if _, err = BackendClasses(testStorageClass(testHybridClass, DriverName)); err == nil {
+		t.Errorf("BackendClasses() without parameter expected error")
 	}
 }
 
@@ -158,7 +158,7 @@ func TestSelectBackend(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			node := testNode("node-1", map[string]string{keyZone: "z1", labelBkd: "b"})
-			env := newTestEnv(t, methodDefault, append(tt.objs, node)...)
+			env := newTestEnv(t, append(tt.objs, node)...)
 
 			class, err := env.prov.selectBackend(node, tt.classes)
 			if tt.wantErr {

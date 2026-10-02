@@ -25,8 +25,9 @@ import (
 )
 
 // TestMain does the one-time setup every e2e scenario package needs: build
-// the shared cluster client from Config, sweep leftover namespaces from a
-// killed previous run, then run the package's tests. Each scenario package
+// the shared cluster client from Config, prepare the local controller (see
+// setupLocalController), sweep leftover namespaces from a killed previous
+// run, then run the package's tests. Each scenario package
 // (test/e2e/<scenario>/) calls this from its own TestMain function - Go
 // requires TestMain to be declared per-package, so it can't be inherited,
 // only delegated to:
@@ -42,10 +43,27 @@ func TestMain(m *testing.M) int {
 		return 1
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
+
+	switch cfg.Controller {
+	case ControllerLocal:
+		if err := setupLocalController(ctx, &cfg, client.Clientset); err != nil {
+			log.Printf("e2e: %v", err)
+			cancel()
+
+			return 1
+		}
+	case ControllerExternal:
+	default:
+		log.Printf("e2e: unknown E2E_CONTROLLER %q, want %q or %q", cfg.Controller, ControllerLocal, ControllerExternal)
+		cancel()
+
+		return 1
+	}
+
 	SharedConfig = cfg
 	SharedClient = client
 
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
 	log.Printf("e2e: sweeping leftover namespaces from previous runs (prefix %q, older than %s)", cfg.NamespacePrefix, cfg.SweepAge)
 	SweepLeftoverNamespaces(ctx, client.Clientset, cfg.NamespacePrefix, cfg.SweepAge)
 	cancel()

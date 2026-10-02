@@ -8,6 +8,8 @@ PUSH ?= false
 SHA ?= $(shell git describe --match=none --always --abbrev=7 --dirty)
 TAG ?= $(shell git describe --tag --always --match v[0-9]\*)
 GO_LDFLAGS := -ldflags "-w -s -X main.version=$(TAG) -X main.commit=$(SHA)"
+# GO_BUILD_TAGS=faultinject builds the controller for e2e crash tests (hidden --fault-inject flag).
+GO_BUILD_TAGS ?=
 
 OS ?= $(shell go env GOOS)
 ARCH ?= $(shell go env GOARCH)
@@ -62,7 +64,7 @@ tools:
 	go install github.com/google/go-licenses@latest
 
 build-%:
-	CGO_ENABLED=0 GOOS=$(OS) GOARCH=$(ARCH) go build $(GO_LDFLAGS) \
+	CGO_ENABLED=0 GOOS=$(OS) GOARCH=$(ARCH) go build $(GO_LDFLAGS) -tags "$(GO_BUILD_TAGS)" \
 		-o bin/hybrid-$*-$(ARCH) ./cmd/$*
 
 .PHONY: build
@@ -80,12 +82,23 @@ lint: ## Lint Code
 unit: ## Unit Tests
 	go test -tags=unit $(shell go list ./...) $(TESTARGS)
 
+# The e2e tests start the controller locally (E2E_CONTROLLER=local), one at a time: -p 1
+# runs the scenario packages one after another. Controller logs are kept in .cache/e2e.
+E2E_OUTPUT := $(CURDIR)/.cache/e2e
+E2E_ARGS := -tags=e2e -count=1 -timeout=90m -v -p 1 -artifacts -outputdir=$(E2E_OUTPUT)
+
 .PHONY: e2e
 e2e: ## Run all e2e tests against the cluster
-	go test -tags=e2e -count=1 -timeout=90m -v ./test/e2e/... $(TESTARGS)
+	@mkdir -p $(E2E_OUTPUT)
+	go test $(E2E_ARGS) ./test/e2e/... $(TESTARGS)
+
+.PHONY: e2e-upgrade
+e2e-upgrade: ## Run the upgrade e2e test, see hack/e2e-upgrade.sh
+	./hack/e2e-upgrade.sh
 
 e2e-%: ## Run one e2e scenario
-	go test -tags=e2e -count=1 -timeout=90m -v ./test/e2e/$*/... $(TESTARGS)
+	@mkdir -p $(E2E_OUTPUT)
+	go test $(E2E_ARGS) ./test/e2e/$*/... $(TESTARGS)
 
 .PHONY: licenses
 licenses:

@@ -34,13 +34,19 @@ import (
 	controller "sigs.k8s.io/sig-storage-lib-external-provisioner/v10/controller"
 	libmetrics "sigs.k8s.io/sig-storage-lib-external-provisioner/v10/controller/metrics"
 
+	"github.com/sergelogvinov/hybrid-csi-plugin/pkg/lifecycle"
 	"github.com/sergelogvinov/hybrid-csi-plugin/pkg/provisioner"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
+	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/workqueue"
 	"k8s.io/component-base/metrics/legacyregistry"
 	"k8s.io/klog/v2"
 )
@@ -48,6 +54,9 @@ import (
 var (
 	version string
 	commit  string
+
+	// faultInject is set only in test builds, see faultinject.go.
+	faultInject *string
 
 	showVersion = flag.Bool("version", false, "Print the version and exit.")
 
@@ -65,7 +74,15 @@ var (
 	leaderElectionRenewDeadline = flag.Duration("leader-election-renew-deadline", 10*time.Second, "Duration, in seconds, that the acting leader will retry refreshing leadership before giving up. Defaults to 10 seconds.")
 	leaderElectionRetryPeriod   = flag.Duration("leader-election-retry-period", 5*time.Second, "Duration, in seconds, the LeaderElector clients should wait between tries of actions. Defaults to 5 seconds.")
 
-	method = flag.String("method", "auto", "PV provisioner method. Can be 'auto', 'pod' or 'annotation'.")
+	retryIntervalStart = flag.Duration("retry-interval-start", time.Second, "Initial retry interval of provisioning. It doubles with each pass while the backend is still provisioning, up to retry-interval-max.")
+	retryIntervalMax   = flag.Duration("retry-interval-max", 5*time.Minute, "Maximum retry interval of provisioning.")
+
+	helperTimeout        = flag.Duration("helper-timeout", provisioner.DefaultHelperTimeout, "How long a helper PVC may stay pending before the claim is rescheduled to another node.")
+	helperMaxReschedules = flag.Int("helper-max-reschedules", 3, "How many times a claim may be rescheduled because of the helper timeout, after that only events are emitted.")
+
+	fixReclaimPolicy = flag.Bool("fix-reclaim-policy", false, "Set the reclaim policy of volumes provisioned by v0.x to the one of their hybrid storage class. Without it the difference is only reported.")
+
+	lifecycleWorkers = flag.Int("lifecycle-workers", 1, "Number of workers of the lifecycle controller.")
 )
 
 const (
@@ -94,14 +111,6 @@ func main() {
 	if *showVersion {
 		klog.Infof("Driver name: %s, Driver version %v, GitVersion %s", DriverName, provisioner.DriverVersion, version)
 		os.Exit(0)
-	}
-
-	switch *method {
-	case "auto", "pod", "annotation":
-		klog.Infof("Using '%s' method for PV provisioning", *method)
-	default:
-		klog.Fatalf("Invalid value for method: %s", *method)
-		os.Exit(1)
 	}
 
 	// get the KUBECONFIG from env if specified (useful for local/debug cluster)
@@ -147,23 +156,49 @@ func main() {
 
 	listers := provisioner.NewListers(factory)
 
-	// claimInformer := factory.Core().V1().PersistentVolumeClaims().Informer()
-	// volumeInformer := factory.Core().V1().PersistentVolumes().Informer()
-	// csiNodeInformer := factory.Storage().V1().CSINodes().Informer()
-
-	// rateLimiter := workqueue.NewItemExponentialFailureRateLimiter(*retryIntervalStart, *retryIntervalMax)
+	// Provision returns ProvisioningInBackground while the backend is provisioning,
+	// the rate limiter sets how often it is called again.
+	rateLimiter := workqueue.NewTypedItemExponentialFailureRateLimiter[any](*retryIntervalStart, *retryIntervalMax)
 
 	// Setup options
 	provisionerOptions := []func(*controller.ProvisionController) error{
 		controller.LeaderElection(false), // Always disable leader election in provisioner lib. Leader election should be done here in the CSI provisioner level instead.
 		controller.FailedProvisionThreshold(0),
 		controller.FailedDeleteThreshold(0),
+		controller.RateLimiter(rateLimiter),
 		// controller.ClaimsInformer(claimInformer),
 		controller.NodesLister(listers.Nodes),
 		// controller.VolumesInformer(volumeInformer),
 	}
 
-	csiProvisioner := provisioner.NewProvisioner(ctx, clientset, *method, listers)
+	broadcaster := record.NewBroadcaster(record.WithContext(ctx))
+	broadcaster.StartStructuredLogging(0)
+	broadcaster.StartRecordingToSink(&typedcorev1.EventSinkImpl{Interface: clientset.CoreV1().Events("")})
+	recorder := broadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: DriverName})
+
+	csiProvisioner := provisioner.NewProvisioner(ctx, clientset, listers, provisioner.Options{
+		HelperTimeout:        *helperTimeout,
+		HelperMaxReschedules: *helperMaxReschedules,
+		Recorder:             recorder,
+	})
+
+	if faultInject != nil && *faultInject != "" {
+		klog.Warningf("Fault injection is enabled, the controller exits at %q", *faultInject)
+
+		csiProvisioner.SetFaultHook(func(point string) {
+			if point == *faultInject {
+				klog.ErrorS(nil, "Fault injection: exiting", "point", point)
+				klog.FlushAndExit(klog.ExitFlushTimeout, 1)
+			}
+		})
+	}
+
+	lifecycleController, err := lifecycle.New(clientset, csiProvisioner, factory, recorder, lifecycle.Options{
+		FixReclaimPolicy: *fixReclaimPolicy,
+	})
+	if err != nil {
+		klog.Fatalf("Failed to create lifecycle controller: %v", err)
+	}
 
 	// Prepare http endpoint for metrics + leader election healthz
 	mux := http.NewServeMux()
@@ -188,6 +223,9 @@ func main() {
 			m.PersistentVolumeDeleteFailedTotal,
 			m.PersistentVolumeDeleteDurationSeconds,
 		}...)
+		reg.MustRegister(csiProvisioner.Collectors()...)
+		reg.MustRegister(lifecycleController.Collectors()...)
+
 		provisionerOptions = append(provisionerOptions, controller.MetricsInstance(m))
 		gatherers = append(gatherers, reg)
 
@@ -225,6 +263,8 @@ func main() {
 				klog.Fatalf("Failed to sync Informers!")
 			}
 		}
+
+		go lifecycleController.Run(ctx, *lifecycleWorkers)
 
 		provisionController.Run(ctx)
 	}
