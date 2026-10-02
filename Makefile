@@ -80,6 +80,13 @@ lint: ## Lint Code
 unit: ## Unit Tests
 	go test -tags=unit $(shell go list ./...) $(TESTARGS)
 
+.PHONY: e2e
+e2e: ## Run all e2e tests against the cluster
+	go test -tags=e2e -count=1 -timeout=90m -v ./test/e2e/... $(TESTARGS)
+
+e2e-%: ## Run one e2e scenario
+	go test -tags=e2e -count=1 -timeout=90m -v ./test/e2e/$*/... $(TESTARGS)
+
 .PHONY: licenses
 licenses:
 	go-licenses check ./... --disallowed_types=forbidden,restricted,reciprocal,unknown

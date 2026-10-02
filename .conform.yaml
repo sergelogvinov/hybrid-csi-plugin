@@ -32,6 +32,7 @@ policies:
     spec:
       skipPaths:
         - .git/
+        - test/e2e/
       includeSuffixes:
         - .go
       excludeSuffixes:
