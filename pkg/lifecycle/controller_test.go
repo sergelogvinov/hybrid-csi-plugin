@@ -20,7 +20,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/sergelogvinov/hybrid-csi-plugin/pkg/provisioner"
 
@@ -30,7 +29,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
 	clienttesting "k8s.io/client-go/testing"
@@ -64,15 +62,13 @@ func newTestEnv(t *testing.T, objs ...runtime.Object) *testEnv {
 
 	client := fake.NewClientset(objs...)
 	factory := informers.NewSharedInformerFactory(client, 0)
-	prov := provisioner.NewProvisioner(ctx, client, provisioner.NewListers(factory), provisioner.Options{})
 	recorder := record.NewFakeRecorder(100)
+	prov := provisioner.NewProvisioner(ctx, client, provisioner.NewListers(factory), provisioner.Options{Recorder: recorder})
 
 	ctrl, err := New(client, prov, factory, recorder, Options{})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-
-	ctrl.cleanupDelay = 0
 
 	t.Cleanup(ctrl.queue.ShutDown)
 
@@ -263,341 +259,6 @@ func legacy(helper *corev1.PersistentVolumeClaim) *corev1.PersistentVolumeClaim 
 	return helper
 }
 
-// bound binds the helper to the volume.
-func bound(helper *corev1.PersistentVolumeClaim) (*corev1.PersistentVolumeClaim, *corev1.PersistentVolume) {
-	pv := testVolume(helper)
-	helper.Spec.VolumeName = pv.Name
-
-	return helper, pv
-}
-
-func deleting(pvc *corev1.PersistentVolumeClaim) *corev1.PersistentVolumeClaim {
-	pvc.DeletionTimestamp = &metav1.Time{Time: time.Now()}
-
-	return pvc
-}
-
-// requireReleased checks that the helper is gone and the claim has no provisioning finalizer.
-func (e *testEnv) requireReleased(claim *corev1.PersistentVolumeClaim) {
-	e.t.Helper()
-
-	if helper := e.getPVC(provisioner.HelperName(claim)); helper != nil {
-		e.t.Errorf("helper PVC still exists: %+v", helper.ObjectMeta)
-	}
-
-	if u := e.getPVC(claim.Name); u != nil && slices.Contains(u.Finalizers, provisioner.FinalizerProvisioning) {
-		e.t.Errorf("user PVC still has finalizer %s", provisioner.FinalizerProvisioning)
-	}
-}
-
-// The claim is deleted before it is bound.
-
-func TestClaimDeletedHelperPending(t *testing.T) {
-	claim := deleting(testClaim())
-	env := newTestEnv(t, append(testClasses(), claim, testHelper(claim))...)
-
-	env.sync(testClaimName)
-
-	env.requireReleased(claim)
-	env.requireEvent(ReasonProvisioningCanceled)
-}
-
-func TestClaimDeletedHelperBound(t *testing.T) {
-	claim := deleting(testClaim())
-	helper, pv := bound(testHelper(claim))
-	env := newTestEnv(t, append(testClasses(), claim, helper, pv)...)
-
-	env.sync(testClaimName)
-
-	env.requireReleased(claim)
-
-	// The fresh volume of the Retain backend is deleted by the backend.
-	if policy := env.getPV(pv.Name).Spec.PersistentVolumeReclaimPolicy; policy != corev1.PersistentVolumeReclaimDelete {
-		t.Errorf("PV reclaim policy = %s, want Delete", policy)
-	}
-}
-
-func TestClaimDeletedAfterMove(t *testing.T) {
-	claim := deleting(testClaim())
-	helper, _ := bound(testHelper(claim))
-	pv := testVolume(claim) // The move is done: the volume is bound to the claim with the hybrid policy.
-	pv.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
-	env := newTestEnv(t, append(testClasses(), claim, helper, pv)...)
-
-	env.sync(testClaimName)
-
-	env.requireReleased(claim)
-
-	// The volume belongs to the claim, it is reclaimed by the policy set by the move.
-	if got := env.getPV(pv.Name); got.Spec.PersistentVolumeReclaimPolicy != corev1.PersistentVolumeReclaimRetain || got.Spec.ClaimRef.UID != claim.UID {
-		t.Errorf("PV changed: %+v", got.Spec)
-	}
-}
-
-func TestClaimDeletedNoHelper(t *testing.T) {
-	claim := deleting(testClaim())
-	env := newTestEnv(t, append(testClasses(), claim)...)
-
-	env.sync(testClaimName)
-
-	env.requireReleased(claim)
-}
-
-// The v0.x helper is not adopted yet: the claim was deleted after Provision() added the finalizer.
-func TestClaimDeletedLegacyHelper(t *testing.T) {
-	claim := deleting(testClaim())
-	helper, pv := bound(legacy(testHelper(claim)))
-	env := newTestEnv(t, append(testClasses(), claim, helper, pv)...)
-
-	env.sync(testClaimName)
-
-	env.requireReleased(claim)
-
-	// The fresh volume of the Retain backend is deleted by the backend.
-	if policy := env.getPV(pv.Name).Spec.PersistentVolumeReclaimPolicy; policy != corev1.PersistentVolumeReclaimDelete {
-		t.Errorf("PV reclaim policy = %s, want Delete", policy)
-	}
-}
-
-// A PVC with the helper name that does not request the volume of the claim is not a helper of v0.x.
-func TestClaimDeletedForeignLegacyHelper(t *testing.T) {
-	claim := deleting(testClaim())
-	foreign := legacy(testHelper(claim))
-	foreign.Spec.Resources.Requests = corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("2Gi")}
-	env := newTestEnv(t, append(testClasses(), claim, foreign)...)
-
-	env.sync(testClaimName)
-
-	if env.getPVC(foreign.Name) == nil {
-		t.Errorf("foreign PVC is deleted")
-	}
-}
-
-// The foreign PVC with the helper name is never touched.
-func TestClaimDeletedForeignHelper(t *testing.T) {
-	claim := deleting(testClaim())
-	foreign := testHelper(claim)
-	foreign.Annotations[provisioner.AnnotationOwnerUID] = foreignUID
-	env := newTestEnv(t, append(testClasses(), claim, foreign)...)
-
-	env.sync(testClaimName)
-
-	if env.getPVC(foreign.Name) == nil {
-		t.Errorf("foreign PVC is deleted")
-	}
-
-	if u := env.getPVC(testClaimName); u != nil && slices.Contains(u.Finalizers, provisioner.FinalizerProvisioning) {
-		t.Errorf("user PVC still has finalizer")
-	}
-}
-
-// The helper is deleted by someone else.
-
-func TestHelperDeletedPending(t *testing.T) {
-	claim := testClaim()
-	helper := deleting(testHelper(claim))
-	env := newTestEnv(t, append(testClasses(), claim, helper)...)
-
-	env.sync(helper.Name)
-
-	if env.getPVC(helper.Name) != nil {
-		t.Errorf("helper PVC still exists")
-	}
-
-	// The claim stays in provisioning, the next Provision() pass creates a new helper.
-	if u := env.getPVC(testClaimName); !slices.Contains(u.Finalizers, provisioner.FinalizerProvisioning) || u.Spec.VolumeName != "" {
-		t.Errorf("user PVC changed: %+v", u)
-	}
-
-	env.requireEvent(ReasonHelperDeleted)
-}
-
-func TestHelperDeletedBound(t *testing.T) {
-	claim := testClaim()
-	helper, pv := bound(deleting(testHelper(claim)))
-	env := newTestEnv(t, append(testClasses(), claim, helper, pv)...)
-
-	env.sync(helper.Name)
-
-	env.requireReleased(claim)
-
-	// The volume is kept and moved to the claim.
-	u := env.getPVC(testClaimName)
-	if u.Spec.VolumeName != pv.Name {
-		t.Errorf("user PVC volumeName = %q, want %q", u.Spec.VolumeName, pv.Name)
-	}
-
-	got := env.getPV(pv.Name)
-	if got.Spec.ClaimRef.UID != claim.UID || got.Spec.PersistentVolumeReclaimPolicy != corev1.PersistentVolumeReclaimDelete ||
-		got.Labels[provisioner.LabelManaged] != provisioner.ValueTrue {
-		t.Errorf("PV is not moved to the claim: %+v", got)
-	}
-
-	env.requireEvent(ReasonVolumeRecovered)
-}
-
-// The volume of the deleted helper does not fit the selected node: it is discarded, not moved.
-func TestHelperDeletedVolumeNodeMismatch(t *testing.T) {
-	claim := testClaim()
-	helper, pv := bound(deleting(testHelper(claim)))
-	pv.Spec.NodeAffinity = &corev1.VolumeNodeAffinity{Required: &corev1.NodeSelector{
-		NodeSelectorTerms: []corev1.NodeSelectorTerm{{MatchExpressions: []corev1.NodeSelectorRequirement{{
-			Key: testZoneLabel, Operator: corev1.NodeSelectorOpIn, Values: []string{"zone-b"},
-		}}}},
-	}}
-
-	env := newTestEnv(t, append(testClasses(), claim, helper, pv)...)
-
-	env.sync(helper.Name)
-
-	if env.getPVC(helper.Name) != nil {
-		t.Errorf("helper PVC still exists")
-	}
-
-	// The claim stays in provisioning, the next Provision() pass creates a new helper.
-	if u := env.getPVC(testClaimName); !slices.Contains(u.Finalizers, provisioner.FinalizerProvisioning) || u.Spec.VolumeName != "" {
-		t.Errorf("user PVC changed: %+v", u)
-	}
-
-	// The fresh volume is still bound to the helper, it is deleted by the backend.
-	got := env.getPV(pv.Name)
-	if got.Spec.ClaimRef.UID != helper.UID || got.Spec.PersistentVolumeReclaimPolicy != corev1.PersistentVolumeReclaimDelete {
-		t.Errorf("PV is moved or kept: %+v", got.Spec)
-	}
-
-	env.requireEvent(ReasonHelperDeleted)
-}
-
-func TestHelperDeletedOwnerGone(t *testing.T) {
-	claim := testClaim()
-	helper, pv := bound(deleting(testHelper(claim)))
-	env := newTestEnv(t, append(testClasses(), helper, pv)...)
-
-	env.sync(helper.Name)
-
-	if env.getPVC(helper.Name) != nil {
-		t.Errorf("helper PVC still exists")
-	}
-
-	if policy := env.getPV(pv.Name).Spec.PersistentVolumeReclaimPolicy; policy != corev1.PersistentVolumeReclaimDelete {
-		t.Errorf("PV reclaim policy = %s, want Delete", policy)
-	}
-}
-
-// A new claim with the same name is not the owner of the helper.
-func TestHelperDeletedOwnerReplaced(t *testing.T) {
-	claim := testClaim()
-	helper := deleting(testHelper(claim))
-
-	replaced := testClaim()
-	replaced.UID = types.UID("uid-new")
-
-	env := newTestEnv(t, append(testClasses(), replaced, helper)...)
-
-	env.sync(helper.Name)
-
-	if env.getPVC(helper.Name) != nil {
-		t.Errorf("helper PVC still exists")
-	}
-
-	if events := env.events(); len(events) != 0 {
-		t.Errorf("events = %v, want none on the new claim", events)
-	}
-}
-
-func TestHelperDeletedForeignVolume(t *testing.T) {
-	claim := testClaim()
-	helper, pv := bound(deleting(testHelper(claim)))
-	pv.Spec.ClaimRef.UID = foreignUID
-	env := newTestEnv(t, append(testClasses(), claim, helper, pv)...)
-
-	env.sync(helper.Name)
-
-	if env.getPVC(helper.Name) != nil {
-		t.Errorf("helper PVC still exists")
-	}
-
-	if got := env.getPV(pv.Name); got.Spec.ClaimRef.UID != foreignUID || got.Spec.PersistentVolumeReclaimPolicy != corev1.PersistentVolumeReclaimRetain {
-		t.Errorf("foreign PV changed: %+v", got.Spec)
-	}
-
-	if u := env.getPVC(testClaimName); u.Spec.VolumeName != "" {
-		t.Errorf("user PVC is bound to %q", u.Spec.VolumeName)
-	}
-}
-
-// Leftovers after the claim is bound.
-
-func TestBoundClaimLeftovers(t *testing.T) {
-	tests := []struct {
-		name   string
-		helper bool
-		key    func(claim *corev1.PersistentVolumeClaim) string
-	}{
-		{name: "helper left, sync claim", helper: true, key: func(c *corev1.PersistentVolumeClaim) string { return c.Name }},
-		{name: "helper left, sync helper", helper: true, key: provisioner.HelperName},
-		{name: "finalizer left", key: func(c *corev1.PersistentVolumeClaim) string { return c.Name }},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			claim := testClaim()
-			pv := testVolume(claim)
-			claim.Spec.VolumeName = pv.Name
-
-			objs := append(testClasses(), claim, pv)
-
-			if tt.helper {
-				helper, _ := bound(testHelper(claim))
-				objs = append(objs, helper)
-			}
-
-			env := newTestEnv(t, objs...)
-
-			env.sync(tt.key(claim))
-
-			env.requireReleased(claim)
-			env.requireEvent(ReasonCleanupFinished)
-		})
-	}
-}
-
-// The Provision() pass that has just bound the claim finishes the cleanup itself, the cleanup waits.
-func TestBoundClaimCleanupDelay(t *testing.T) {
-	claim := testClaim()
-	pv := testVolume(claim)
-	claim.Spec.VolumeName = pv.Name
-	helper, _ := bound(testHelper(claim))
-
-	env := newTestEnv(t, append(testClasses(), claim, pv, helper)...)
-	env.ctrl.cleanupDelay = time.Hour
-
-	env.sync(testClaimName)
-
-	if env.writes != 0 {
-		t.Errorf("controller made %d writes, want 0", env.writes)
-	}
-
-	env.ctrl.cleanupDelay = 0
-	env.sync(testClaimName)
-
-	env.requireReleased(claim)
-}
-
-// A claim that is being provisioned belongs to Provision().
-func TestClaimProvisioning(t *testing.T) {
-	claim := testClaim()
-	helper, pv := bound(testHelper(claim))
-	env := newTestEnv(t, append(testClasses(), claim, helper, pv)...)
-
-	env.sync(testClaimName)
-	env.sync(helper.Name)
-
-	if env.writes != 0 {
-		t.Errorf("controller made %d writes, want 0", env.writes)
-	}
-}
-
 func TestEnqueue(t *testing.T) {
 	claim := testClaim()
 	helper := testHelper(claim)
@@ -619,4 +280,21 @@ func TestEnqueue(t *testing.T) {
 	if n := env.ctrl.queue.Len(); n != 2 {
 		t.Errorf("queue length = %d after a helper, want 2 (helper and its owner)", n)
 	}
+}
+
+// sync passes the claim to Reconcile: the claim deleted during provisioning is released.
+func TestSync(t *testing.T) {
+	claim := testClaim()
+	claim.DeletionTimestamp = new(metav1.Now())
+	helper := testHelper(claim)
+
+	env := newTestEnv(t, append(testClasses(), claim, helper)...)
+
+	env.sync(testClaimName)
+
+	if env.getPVC(helper.Name) != nil {
+		t.Errorf("helper PVC still exists")
+	}
+
+	env.requireEvent(provisioner.ReasonProvisioningCanceled)
 }

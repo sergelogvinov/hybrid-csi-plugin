@@ -20,7 +20,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 	"sync"
 	"time"
 
@@ -83,6 +82,12 @@ type HybridProvisioner struct {
 	metrics  *metrics
 	clock    clock.PassiveClock
 
+	// cleanupDelay is the grace period before Reconcile cleans up the leftovers of a bound claim,
+	// the Provision() pass that has just bound it finishes the cleanup itself.
+	cleanupDelay time.Duration
+	// boundSince is when the claim (by UID) was first seen bound with leftovers by Reconcile.
+	boundSince sync.Map
+
 	// mirrored is the set of event keys of the helper (by UID) mirrored onto the claim, see mirrorEvents.
 	mirrored sync.Map
 
@@ -90,8 +95,15 @@ type HybridProvisioner struct {
 	faultHook func(point string)
 }
 
-// DefaultHelperTimeout is the default of Options.HelperTimeout.
-const DefaultHelperTimeout = 10 * time.Minute
+const (
+	// DefaultHelperTimeout is the default of Options.HelperTimeout.
+	DefaultHelperTimeout = 10 * time.Minute
+	// DefaultCleanupDelay is the grace period before Reconcile cleans up the leftovers of a bound claim.
+	DefaultCleanupDelay = 30 * time.Second
+)
+
+// errNotHelper is returned when a PVC with the helper name exists, but it is not a helper of the claim.
+var errNotHelper = errors.New("not a helper of this claim")
 
 // Options configures the provisioner.
 type Options struct {
@@ -128,6 +140,8 @@ func NewProvisioner(
 		recorder: opts.Recorder,
 		metrics:  newMetrics(),
 		clock:    clock.RealClock{},
+
+		cleanupDelay: DefaultCleanupDelay,
 
 		driverLister:    listers.CSIDrivers,
 		scLister:        listers.StorageClasses,
@@ -171,7 +185,7 @@ func (p *HybridProvisioner) Provision(ctx context.Context, opts controller.Provi
 	node := opts.SelectedNode
 
 	if claim.DeletionTimestamp != nil {
-		// The lifecycle controller cleans up the claim that is being deleted.
+		// Reconcile cleans up the claim that is being deleted.
 		return nil, controller.ProvisioningFinished, &controller.IgnoredError{Reason: "persistentvolumeclaim is being deleted"}
 	}
 
@@ -186,8 +200,12 @@ func (p *HybridProvisioner) Provision(ctx context.Context, opts controller.Provi
 		return nil, controller.ProvisioningFinished, &controller.IgnoredError{Reason: "persistentvolumeclaim is deleted or being deleted"}
 	}
 
-	helper, err := p.getHelper(claim)
+	helper, legacy, err := p.helperOf(claim, classes)
 	if err != nil {
+		if errors.Is(err, errNotHelper) {
+			return nil, controller.ProvisioningFinished, err
+		}
+
 		return nil, controller.ProvisioningInBackground, err
 	}
 
@@ -195,12 +213,7 @@ func (p *HybridProvisioner) Provision(ctx context.Context, opts controller.Provi
 		return p.provisionHelper(ctx, claim, node, classes)
 	}
 
-	legacy := !IsHelperOf(helper, claim)
-	if legacy && !IsLegacyHelperOf(helper, claim, classes) {
-		return nil, controller.ProvisioningFinished, fmt.Errorf("persistentvolumeclaim %s already exists and is not a helper of this claim", klog.KObj(helper))
-	}
-
-	// A deleted helper is handled by the lifecycle controller, it cannot be adopted:
+	// A deleted helper is handled by Reconcile, it cannot be adopted:
 	// no finalizer can be added to an object that is being deleted.
 	if helper.DeletionTimestamp != nil {
 		return nil, controller.ProvisioningInBackground, fmt.Errorf("waiting for helper persistentvolumeclaim %s to be deleted", klog.KObj(helper))
@@ -219,7 +232,7 @@ func (p *HybridProvisioner) Provision(ctx context.Context, opts controller.Provi
 	if helper.Spec.VolumeName == "" {
 		// An empty selected node is removed by the backend, see waitHelper.
 		if selected := helper.Annotations[annotationSelectedNode]; selected != "" && selected != node.Name {
-			if err = p.DeleteHelper(ctx, helper, nil); err != nil {
+			if err = p.deleteHelper(ctx, helper, nil); err != nil {
 				return nil, controller.ProvisioningInBackground, err
 			}
 
@@ -236,18 +249,15 @@ func (p *HybridProvisioner) Provision(ctx context.Context, opts controller.Provi
 		}
 
 		// The volume is deleted (by an admin or the backend), the helper can never be bound again: a new one is created.
-		if err = p.DeleteHelper(ctx, helper, nil); err != nil {
+		if err = p.deleteHelper(ctx, helper, nil); err != nil {
 			return nil, controller.ProvisioningInBackground, err
 		}
 
 		return nil, controller.ProvisioningInBackground, fmt.Errorf("persistentvolume %s of helper persistentvolumeclaim %s is deleted, the helper is recreated", helper.Spec.VolumeName, klog.KObj(helper))
 	}
 
-	// The volume must fit the selected node, unless it has already been moved to the claim.
-	if pv.Spec.ClaimRef == nil || pv.Spec.ClaimRef.UID != claim.UID {
-		if err = volume.CheckNodeAffinity(pv, node.Labels); err != nil {
-			return p.discardVolume(ctx, claim, helper, pv, node, err)
-		}
+	if err = volumeFits(claim, pv, node); err != nil {
+		return p.discardVolume(ctx, claim, helper, pv, node, err)
 	}
 
 	return p.transfer(ctx, opts, claim, helper, pv)
@@ -261,16 +271,11 @@ func (p *HybridProvisioner) Delete(_ context.Context, pv *corev1.PersistentVolum
 	return nil
 }
 
-// VolumeFitsClaim checks that the volume can be used on the node selected for the claim.
-func (p *HybridProvisioner) VolumeFitsClaim(claim *corev1.PersistentVolumeClaim, pv *corev1.PersistentVolume) error {
-	name := claim.Annotations[annotationSelectedNode]
-	if name == "" {
-		return fmt.Errorf("persistentvolumeclaim %s has no selected node", klog.KObj(claim))
-	}
-
-	node, err := p.nodeLister.Get(name)
-	if err != nil {
-		return fmt.Errorf("failed to get node %q: %v", name, err)
+// volumeFits checks that the volume can be used on the node selected for the claim.
+// A volume that has already been moved to the claim always fits.
+func volumeFits(claim *corev1.PersistentVolumeClaim, pv *corev1.PersistentVolume, node *corev1.Node) error {
+	if boundTo(pv, claim) {
+		return nil
 	}
 
 	return volume.CheckNodeAffinity(pv, node.Labels)
@@ -311,10 +316,7 @@ func (p *HybridProvisioner) provisionHelper(
 	p.metrics.phase(phaseBackend, err)
 
 	if err != nil {
-		p.metrics.phases.WithLabelValues(phaseReschedule, rescheduleNoBackend).Inc()
-		p.recorder.Eventf(claim, corev1.EventTypeWarning, ReasonRescheduled, "No backend storage class for node %s", node.Name)
-
-		return nil, controller.ProvisioningReschedule, err
+		return p.reschedule(ctx, claim, nil, nil, causeNoBackend(node, err))
 	}
 
 	if claim, err = p.prepareClaim(ctx, claim, backend.Name); err != nil {
@@ -338,8 +340,6 @@ func (p *HybridProvisioner) provisionHelper(
 }
 
 // discardVolume deletes the helper with the volume that does not fit the selected node.
-// The claim is rescheduled up to maxReschedules times, counted with the helper timeouts:
-// a backend that ignores the selected node would otherwise create and delete volumes forever.
 func (p *HybridProvisioner) discardVolume(
 	ctx context.Context,
 	claim, helper *corev1.PersistentVolumeClaim,
@@ -351,44 +351,19 @@ func (p *HybridProvisioner) discardVolume(
 	if helper.Annotations[annotationSelectedNode] != node.Name {
 		klog.V(2).InfoS("Persistent volume of the previous node does not fit the selected node, deleting it", "claim", klog.KObj(claim), "PV", klog.KObj(pv), "node", node.Name, "reason", reason)
 
-		if err := p.DeleteHelper(ctx, helper, pv); err != nil {
+		if err := p.deleteHelper(ctx, helper, pv); err != nil {
 			return nil, controller.ProvisioningInBackground, err
 		}
 
 		return nil, controller.ProvisioningInBackground, fmt.Errorf("selected node changed to %q, helper persistentvolumeclaim %s is recreated", node.Name, klog.KObj(helper))
 	}
 
-	reschedules := reschedulesOf(claim)
-	if reschedules >= p.maxReschedules {
-		p.recorder.Eventf(claim, corev1.EventTypeWarning, ReasonVolumeNodeMismatch,
-			"Volume %s of storage class %s does not fit node %s, the claim was rescheduled %d times; delete helper %s to try again",
-			pv.Name, *helper.Spec.StorageClassName, node.Name, reschedules, helper.Name)
-
-		return nil, controller.ProvisioningInBackground, fmt.Errorf("persistentvolume %s of storage class %q does not fit node %q: %v", pv.Name, *helper.Spec.StorageClassName, node.Name, reason)
-	}
-
-	klog.V(2).InfoS("Persistent volume does not fit the selected node, deleting it", "claim", klog.KObj(claim), "PV", klog.KObj(pv), "node", node.Name, "reason", reason)
-
-	// The claim first: a crash before the helper is deleted repeats the reschedule, but never exceeds the limit.
-	if err := p.rescheduleClaim(ctx, claim); err != nil {
-		return nil, controller.ProvisioningInBackground, err
-	}
-
-	if err := p.DeleteHelper(ctx, helper, pv); err != nil {
-		return nil, controller.ProvisioningInBackground, err
-	}
-
-	p.metrics.phases.WithLabelValues(phaseReschedule, rescheduleNodeAffinity).Inc()
-	p.recorder.Eventf(claim, corev1.EventTypeWarning, ReasonRescheduled,
-		"Volume %s of storage class %s does not fit node %s, it is deleted, rescheduling (%d of %d)",
-		pv.Name, *helper.Spec.StorageClassName, node.Name, reschedules+1, p.maxReschedules)
-
-	return nil, controller.ProvisioningReschedule, fmt.Errorf("persistentvolume %s of storage class %q does not fit node %q: %v", pv.Name, *helper.Spec.StorageClassName, node.Name, reason)
+	// A backend that ignores the selected node would otherwise create and delete volumes forever.
+	return p.reschedule(ctx, claim, helper, pv, causeVolumeNodeMismatch(helper, pv, node, reason))
 }
 
 // waitHelper waits for the backend to provision the pending helper.
-// After the helper timeout, or when the backend rejects the node, the claim is rescheduled
-// up to maxReschedules times, then only events are emitted.
+// After the helper timeout, or when the backend rejects the node, the claim is rescheduled.
 func (p *HybridProvisioner) waitHelper(
 	ctx context.Context,
 	claim, helper *corev1.PersistentVolumeClaim,
@@ -398,42 +373,15 @@ func (p *HybridProvisioner) waitHelper(
 
 	// The backend removes the selected node when it cannot provision the volume there (e.g. out of
 	// capacity) and waits for the scheduler, which never selects a node for the helper again.
-	rejected := helper.Annotations[annotationSelectedNode] == ""
-
-	age := p.helperAge(helper)
-	if !rejected && age < p.helperTimeout {
-		return nil, controller.ProvisioningInBackground, fmt.Errorf("waiting for storage class %q to provision helper persistentvolumeclaim %s", *helper.Spec.StorageClassName, klog.KObj(helper))
+	if helper.Annotations[annotationSelectedNode] == "" {
+		return p.reschedule(ctx, claim, helper, nil, causeBackendRejected(helper, node))
 	}
 
-	cause, event, metric := fmt.Sprintf("is not provisioned in %s", age.Round(time.Second)), ReasonHelperTimeout, rescheduleTimeout
-	if rejected {
-		cause, event, metric = "is rejected by the backend on node "+node.Name, ReasonBackendRejected, rescheduleRejected
+	if age := p.helperAge(helper); age >= p.helperTimeout {
+		return p.reschedule(ctx, claim, helper, nil, causeHelperTimeout(helper, age))
 	}
 
-	reschedules := reschedulesOf(claim)
-	if reschedules >= p.maxReschedules {
-		p.recorder.Eventf(claim, corev1.EventTypeWarning, event,
-			"Helper %s of storage class %s %s, the claim was rescheduled %d times; delete helper %s to try again",
-			helper.Name, *helper.Spec.StorageClassName, cause, reschedules, helper.Name)
-
-		return nil, controller.ProvisioningInBackground, fmt.Errorf("helper persistentvolumeclaim %s %s", klog.KObj(helper), cause)
-	}
-
-	// The claim first: a crash before the helper is deleted repeats the reschedule, but never exceeds the limit.
-	if err := p.rescheduleClaim(ctx, claim); err != nil {
-		return nil, controller.ProvisioningInBackground, err
-	}
-
-	if err := p.DeleteHelper(ctx, helper, nil); err != nil {
-		return nil, controller.ProvisioningInBackground, err
-	}
-
-	p.metrics.phases.WithLabelValues(phaseReschedule, metric).Inc()
-	p.recorder.Eventf(claim, corev1.EventTypeWarning, ReasonRescheduled,
-		"Helper %s of storage class %s %s, rescheduling (%d of %d)",
-		helper.Name, *helper.Spec.StorageClassName, cause, reschedules+1, p.maxReschedules)
-
-	return nil, controller.ProvisioningReschedule, fmt.Errorf("helper persistentvolumeclaim %s %s", klog.KObj(helper), cause)
+	return nil, controller.ProvisioningInBackground, fmt.Errorf("waiting for storage class %q to provision helper persistentvolumeclaim %s", *helper.Spec.StorageClassName, klog.KObj(helper))
 }
 
 // helperAge returns how long the helper exists.
@@ -445,16 +393,6 @@ func (p *HybridProvisioner) helperAge(helper *corev1.PersistentVolumeClaim) time
 	return p.clock.Since(helper.CreationTimestamp.Time)
 }
 
-// reschedulesOf returns how many times the claim was rescheduled because of the helper timeout.
-func reschedulesOf(claim *corev1.PersistentVolumeClaim) int {
-	n, err := strconv.Atoi(claim.Annotations[AnnotationReschedules])
-	if err != nil {
-		return 0
-	}
-
-	return n
-}
-
 // transfer moves the volume from the helper to the claim and cleans up.
 func (p *HybridProvisioner) transfer(
 	ctx context.Context,
@@ -462,9 +400,9 @@ func (p *HybridProvisioner) transfer(
 	claim, helper *corev1.PersistentVolumeClaim,
 	pv *corev1.PersistentVolume,
 ) (*corev1.PersistentVolume, controller.ProvisioningState, error) {
-	pv, claim, err := p.MoveVolume(ctx, opts.StorageClass, claim, helper, pv)
+	pv, claim, err := p.moveVolume(ctx, opts.StorageClass, claim, helper, pv)
 	if err != nil {
-		if errors.Is(err, ErrForeignVolume) {
+		if errors.Is(err, errForeignVolume) {
 			return nil, controller.ProvisioningFinished, err
 		}
 
@@ -472,8 +410,8 @@ func (p *HybridProvisioner) transfer(
 	}
 
 	// The claim is bound, the library does not call Provision for it again.
-	// Leftovers of a failed cleanup are removed by the lifecycle controller.
-	if err = p.Cleanup(ctx, claim, helper, pv); err != nil {
+	// Leftovers of a failed cleanup are removed by Reconcile.
+	if err = p.cleanup(ctx, claim, helper, pv); err != nil {
 		klog.ErrorS(err, "Failed to clean up after provisioning", "claim", klog.KObj(claim), "PVC", klog.KObj(helper))
 	}
 

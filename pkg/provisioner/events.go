@@ -42,6 +42,15 @@ const (
 	ReasonBackendRejected = "BackendRejected"
 	// ReasonVolumeNodeMismatch: the volume does not fit the selected node and the claim is not rescheduled any more.
 	ReasonVolumeNodeMismatch = "VolumeNodeMismatch"
+
+	// ReasonProvisioningCanceled: the claim was deleted before it was bound, the helper is deleted.
+	ReasonProvisioningCanceled = "ProvisioningCanceled"
+	// ReasonHelperDeleted: the helper was deleted by someone else before the volume was provisioned.
+	ReasonHelperDeleted = "HelperDeleted"
+	// ReasonVolumeRecovered: the helper was deleted by someone else, its volume is moved to the claim.
+	ReasonVolumeRecovered = "VolumeRecovered"
+	// ReasonCleanupFinished: the leftovers of an interrupted provisioning are cleaned up.
+	ReasonCleanupFinished = "CleanupFinished"
 )
 
 // maxMirroredEvents limits the number of helper events mirrored onto the claim in one pass.
