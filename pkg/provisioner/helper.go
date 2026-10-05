@@ -87,14 +87,14 @@ func buildHelperPVC(claim *corev1.PersistentVolumeClaim, storageClass *storagev1
 	}
 }
 
-// IsHelperOf reports whether the helper was created by us for the claim.
-func IsHelperOf(helper, claim *corev1.PersistentVolumeClaim) bool {
+// isHelperOf reports whether the helper was created by us for the claim.
+func isHelperOf(helper, claim *corev1.PersistentVolumeClaim) bool {
 	return helper.Annotations[AnnotationOwnerUID] == string(claim.UID)
 }
 
-// IsLegacyHelperOf reports whether the helper was created by v0.x for the claim: it has no owner-uid,
+// isLegacyHelperOf reports whether the helper was created by v0.x for the claim: it has no owner-uid,
 // uses one of the backend classes and requests the same volume as the claim.
-func IsLegacyHelperOf(helper, claim *corev1.PersistentVolumeClaim, classes []string) bool {
+func isLegacyHelperOf(helper, claim *corev1.PersistentVolumeClaim, classes []string) bool {
 	if _, ok := helper.Annotations[AnnotationOwnerUID]; ok {
 		return false
 	}
@@ -112,18 +112,28 @@ func IsLegacyHelperOf(helper, claim *corev1.PersistentVolumeClaim, classes []str
 		helper.Spec.Resources.Requests.Storage().Equal(*claim.Spec.Resources.Requests.Storage())
 }
 
-// getHelper returns the helper of the claim from the informer cache, or nil if it does not exist.
-func (p *HybridProvisioner) getHelper(claim *corev1.PersistentVolumeClaim) (*corev1.PersistentVolumeClaim, error) {
-	helper, err := p.claimLister.PersistentVolumeClaims(claim.Namespace).Get(HelperName(claim))
+// helperOf returns the helper of the claim from the informer cache, or nil if there is none.
+//
+// A helper created by v0.x for one of the backend classes is returned too, with legacy set:
+// it is not adopted yet. Any other PVC with the helper name is errNotHelper, it is never touched.
+func (p *HybridProvisioner) helperOf(claim *corev1.PersistentVolumeClaim, classes []string) (helper *corev1.PersistentVolumeClaim, legacy bool, err error) {
+	helper, err = p.claimLister.PersistentVolumeClaims(claim.Namespace).Get(HelperName(claim))
 	if err != nil {
 		if errors.IsNotFound(err) {
-			return nil, nil
+			return nil, false, nil
 		}
 
-		return nil, fmt.Errorf("failed to get helper persistentvolumeclaim: %v", err)
+		return nil, false, fmt.Errorf("failed to get helper persistentvolumeclaim: %v", err)
 	}
 
-	return helper, nil
+	switch {
+	case isHelperOf(helper, claim):
+		return helper, false, nil
+	case isLegacyHelperOf(helper, claim, classes):
+		return helper, true, nil
+	}
+
+	return nil, false, fmt.Errorf("persistentvolumeclaim %s already exists: %w", klog.KObj(helper), errNotHelper)
 }
 
 // createHelper creates the helper. An existing helper means the informer cache is behind, the next pass sees it.
@@ -173,13 +183,13 @@ func (p *HybridProvisioner) adoptHelper(ctx context.Context, helper, claim *core
 	return helper, nil
 }
 
-// DeleteHelper deletes the helper.
+// deleteHelper deletes the helper.
 //
 // If the helper still owns the volume (the move did not happen), the volume is switched to Delete
 // first, so that the backend removes it instead of leaving it Released. The volume is passed if it
 // is known, otherwise it is looked up, also when the backend has created it but the helper does not
 // point at it yet.
-func (p *HybridProvisioner) DeleteHelper(ctx context.Context, helper *corev1.PersistentVolumeClaim, pv *corev1.PersistentVolume) error {
+func (p *HybridProvisioner) deleteHelper(ctx context.Context, helper *corev1.PersistentVolumeClaim, pv *corev1.PersistentVolume) error {
 	if pv == nil {
 		var err error
 
@@ -188,7 +198,7 @@ func (p *HybridProvisioner) DeleteHelper(ctx context.Context, helper *corev1.Per
 		}
 	}
 
-	if pv != nil && pv.Spec.ClaimRef != nil && pv.Spec.ClaimRef.UID == helper.UID &&
+	if pv != nil && boundTo(pv, helper) &&
 		pv.Spec.PersistentVolumeReclaimPolicy != corev1.PersistentVolumeReclaimDelete {
 		if err := p.deleteVolumeWithHelper(ctx, pv, helper); err != nil {
 			return err
@@ -239,7 +249,7 @@ func (p *HybridProvisioner) helperVolume(ctx context.Context, helper *corev1.Per
 	}
 
 	for _, pv := range pvs {
-		if pv.Spec.ClaimRef != nil && pv.Spec.ClaimRef.UID == helper.UID {
+		if boundTo(pv, helper) {
 			return pv, nil
 		}
 	}
@@ -364,29 +374,6 @@ func (p *HybridProvisioner) prepareClaim(ctx context.Context, claim *corev1.Pers
 	}
 
 	return claim, nil
-}
-
-// rescheduleClaim prepares the claim for a reschedule in one write: unpins the backend StorageClass,
-// removes the selected node and counts the reschedule.
-//
-// The library removes the selected node itself after ProvisioningReschedule, but with the claim
-// it passed to Provision(), which is stale after this write, so it is done here.
-func (p *HybridProvisioner) rescheduleClaim(ctx context.Context, claim *corev1.PersistentVolumeClaim) error {
-	claim = claim.DeepCopy()
-	delete(claim.Annotations, AnnotationBackendClass)
-	delete(claim.Annotations, annotationSelectedNode)
-
-	if claim.Annotations == nil {
-		claim.Annotations = map[string]string{}
-	}
-
-	claim.Annotations[AnnotationReschedules] = strconv.Itoa(reschedulesOf(claim) + 1)
-
-	if _, err := p.client.CoreV1().PersistentVolumeClaims(claim.Namespace).Update(ctx, claim, metav1.UpdateOptions{}); err != nil {
-		return fmt.Errorf("failed to update persistentvolumeclaim: %v", err)
-	}
-
-	return nil
 }
 
 func hasAnnotations(annotations, want map[string]string) bool {

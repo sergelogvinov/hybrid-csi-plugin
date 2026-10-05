@@ -692,8 +692,8 @@ func TestProvisionForeignVolume(t *testing.T) {
 	env.bindHelpers()
 
 	_, state, err := env.provision("data", nodeA)
-	if !errors.Is(err, ErrForeignVolume) || state != controller.ProvisioningFinished {
-		t.Fatalf("Provision() = %v, %v; want %v with %v", state, err, controller.ProvisioningFinished, ErrForeignVolume)
+	if !errors.Is(err, errForeignVolume) || state != controller.ProvisioningFinished {
+		t.Fatalf("Provision() = %v, %v; want %v with %v", state, err, controller.ProvisioningFinished, errForeignVolume)
 	}
 
 	pvs := env.listPVs()
@@ -1265,8 +1265,8 @@ func TestDeleteHelperGone(t *testing.T) {
 	helper.CreationTimestamp = metav1.NewTime(env.clock.Now().Add(-time.Minute))
 	env.prov.mirrored.Store(helper.UID, map[string]bool{})
 
-	if err := env.prov.DeleteHelper(t.Context(), helper, nil); err != nil {
-		t.Fatalf("DeleteHelper() error = %v", err)
+	if err := env.prov.deleteHelper(t.Context(), helper, nil); err != nil {
+		t.Fatalf("deleteHelper() error = %v", err)
 	}
 
 	if _, ok := env.prov.mirrored.Load(helper.UID); ok {

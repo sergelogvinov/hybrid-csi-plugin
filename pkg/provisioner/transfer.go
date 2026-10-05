@@ -31,8 +31,8 @@ import (
 	"k8s.io/klog/v2"
 )
 
-// ErrForeignVolume is returned when the volume is bound to neither the helper nor the claim, it is never moved.
-var ErrForeignVolume = errors.New("persistentvolume is bound to another claim")
+// errForeignVolume is returned when the volume is bound to neither the helper nor the claim, it is never moved.
+var errForeignVolume = errors.New("persistentvolume is bound to another claim")
 
 // Fault injection points, see HybridProvisioner.SetFaultHook.
 const (
@@ -42,9 +42,9 @@ const (
 	FaultAfterBind = "after-bind"
 )
 
-// MoveVolume moves the volume from the helper to the claim and binds the claim to it.
-// It returns ErrForeignVolume if the volume is bound to neither the helper nor the claim.
-func (p *HybridProvisioner) MoveVolume(
+// moveVolume moves the volume from the helper to the claim and binds the claim to it.
+// It returns errForeignVolume if the volume is bound to neither the helper nor the claim.
+func (p *HybridProvisioner) moveVolume(
 	ctx context.Context,
 	hsc *storagev1.StorageClass,
 	claim, helper *corev1.PersistentVolumeClaim,
@@ -55,7 +55,7 @@ func (p *HybridProvisioner) MoveVolume(
 		provisioner = helper.Annotations[annotationStorageProvisioner]
 	}
 
-	moved := pv.Spec.ClaimRef != nil && pv.Spec.ClaimRef.UID == claim.UID
+	moved := boundTo(pv, claim)
 
 	pv, err := p.transferVolume(ctx, pv, helper, claim, hsc)
 	if err != nil {
@@ -84,31 +84,27 @@ func (p *HybridProvisioner) MoveVolume(
 	return pv, claim, nil
 }
 
-// Cleanup finishes provisioning of the claim: deletes the helper, if there is one,
+// cleanup finishes provisioning of the claim: deletes the helper, if there is one,
 // then removes the provisioning finalizer from the claim. The volume is passed if it is known.
-func (p *HybridProvisioner) Cleanup(
-	ctx context.Context,
-	claim, helper *corev1.PersistentVolumeClaim,
-	pv *corev1.PersistentVolume,
-) error {
-	err := p.cleanup(ctx, claim, helper, pv)
-	p.metrics.phase(phaseCleanup, err)
-
-	return err
-}
-
 func (p *HybridProvisioner) cleanup(
 	ctx context.Context,
 	claim, helper *corev1.PersistentVolumeClaim,
 	pv *corev1.PersistentVolume,
-) error {
+) (err error) {
+	defer func() { p.metrics.phase(phaseCleanup, err) }()
+
 	if helper != nil {
-		if err := p.DeleteHelper(ctx, helper, pv); err != nil {
+		if err = p.deleteHelper(ctx, helper, pv); err != nil {
 			return err
 		}
 	}
 
 	return p.releaseClaim(ctx, claim)
+}
+
+// boundTo reports whether the volume is bound to the PVC, by UID: the helper before the move, the claim after it.
+func boundTo(pv *corev1.PersistentVolume, pvc *corev1.PersistentVolumeClaim) bool {
+	return pv.Spec.ClaimRef != nil && pv.Spec.ClaimRef.UID == pvc.UID
 }
 
 // ReclaimPolicy returns the reclaim policy of the hybrid StorageClass, Delete if it has none.
@@ -129,10 +125,10 @@ func (p *HybridProvisioner) transferVolume(
 	hsc *storagev1.StorageClass,
 ) (*corev1.PersistentVolume, error) {
 	switch {
-	case pv.Spec.ClaimRef != nil && pv.Spec.ClaimRef.UID == claim.UID:
+	case boundTo(pv, claim):
 		return pv, nil
-	case pv.Spec.ClaimRef == nil || pv.Spec.ClaimRef.UID != helper.UID:
-		return nil, fmt.Errorf("%w: persistentvolume %s, claimRef %v", ErrForeignVolume, pv.Name, pv.Spec.ClaimRef)
+	case !boundTo(pv, helper):
+		return nil, fmt.Errorf("%w: persistentvolume %s, claimRef %v", errForeignVolume, pv.Name, pv.Spec.ClaimRef)
 	}
 
 	pv = pv.DeepCopy()
